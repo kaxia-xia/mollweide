@@ -531,7 +531,6 @@ static void render_compare(Image &frame,
 // Draw text on image (simple pixel-based rendering)
 // ---------------------------------------------------------------------------
 // 8x8 bitmap font (ASCII 32-127)
-// Each character is 8 bytes (8 rows x 8 columns, MSB left)
 static const unsigned char font8x8[128][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 32 space
     {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00}, // 33 !
@@ -558,7 +557,7 @@ static const unsigned char font8x8[128][8] = {
     {0x1c,0x30,0x60,0x7c,0x66,0x66,0x3c,0x00}, // 54 6
     {0x7e,0x06,0x0c,0x18,0x30,0x30,0x30,0x00}, // 55 7
     {0x3c,0x66,0x66,0x3c,0x66,0x66,0x3c,0x00}, // 56 8
-    {0x3c,0x66,0x66,0x3e,0x06,0x0c,0x38,0x00}, // 57 9
+    {0x3c,0x66,0x66,0x3e,0x06,0x66,0x3c,0x00}, // 57 9
     {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x00}, // 58 :
     {0x00,0x18,0x18,0x00,0x00,0x18,0x18,0x30}, // 59 ;
     {0x0c,0x18,0x30,0x60,0x30,0x18,0x0c,0x00}, // 60 <
@@ -597,7 +596,7 @@ static const unsigned char font8x8[128][8] = {
     {0x3c,0x0c,0x0c,0x0c,0x0c,0x0c,0x3c,0x00}, // 93 ]
     {0x18,0x3c,0x66,0x00,0x00,0x00,0x00,0x00}, // 94 ^
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xff}, // 95 _
-    {0x18,0x0c,0x06,0x00,0x00,0x00,0x00,0x00}, // 96 `
+    {0x18,0x0c,0x06,0x00,0x00,0x00,0x00,0x00}, // 96 \`
     {0x00,0x00,0x3c,0x06,0x3e,0x66,0x3e,0x00}, // 97 a
     {0x60,0x60,0x7c,0x66,0x66,0x66,0x7c,0x00}, // 98 b
     {0x00,0x00,0x3c,0x66,0x60,0x66,0x3c,0x00}, // 99 c
@@ -679,8 +678,7 @@ static void print_usage(const char *prog) {
         "  --lat 纬度       指定视角纬度，与 --lon 配合使用\n"
         "  --compare 纬度   生成0°和180°并排对比图，参数为观察纬度\n"
         "  --video 视频文件 输入视频文件，逐帧处理为对比图再合成新视频\n"
-        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n"
-        "  --gpu            尝试使用 GPU 加速（需要 OpenCL 支持）\n",
+        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n",
         prog);
 }
 
@@ -857,18 +855,23 @@ static int mode_compare(const char *input_file, double lat0,
                     ell, ecx, ecy, rx, ry,
                     land_pct, water_pct);
 
-    // Draw labels using bitmap font
-    draw_text(frame, 10, 10, "0Â°", 255, 255, 255);
-    draw_text(frame, FW/2 + 10, 10, "180Â°", 255, 255, 255);
+    // Add stars background
+    generate_stars(frame, FW, FH, 42);
 
-    // Left side: green large digits for land percentage
+    // Draw labels
+    draw_text(frame, 10, 10, "0", 255, 255, 255);
+    draw_text(frame, FW/2 + 10, 10, "180", 255, 255, 255);
+
+    // Left side: green large digits for land percentage (2x size)
     char land_text[16];
     snprintf(land_text, sizeof(land_text), "%.1f%%", land_pct);
     int land_x = (FW/4 - (int)strlen(land_text) * 18) / 2;
     for (int ci = 0; land_text[ci]; ++ci) {
         int cx = land_x + ci * 18;
+        unsigned char ch = (unsigned char)land_text[ci];
+        if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
-            unsigned char bits = font8x8[(unsigned char)land_text[ci]][row];
+            unsigned char bits = font8x8[ch][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
                     frame.set_pixel(cx + col*2, 50 + row*2, 0, 255, 0);
@@ -880,14 +883,16 @@ static int mode_compare(const char *input_file, double lat0,
         }
     }
 
-    // Right side: blue large digits for water percentage
+    // Right side: blue large digits for water percentage (2x size)
     char water_text[16];
     snprintf(water_text, sizeof(water_text), "%.1f%%", water_pct);
     int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 18) / 2;
     for (int ci = 0; water_text[ci]; ++ci) {
         int cx = water_x + ci * 18;
+        unsigned char ch = (unsigned char)water_text[ci];
+        if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
-            unsigned char bits = font8x8[(unsigned char)water_text[ci]][row];
+            unsigned char bits = font8x8[ch][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
                     frame.set_pixel(cx + col*2, 50 + row*2, 0, 100, 255);
@@ -1080,9 +1085,7 @@ int main(int argc, char **argv) {
                 output_video = argv[++i];
             else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
                 lat0 = atof(argv[++i]) * PI / 180.0;
-            else if (strcmp(argv[i], "--gpu") == 0) {
-                printf("GPU 加速模式 (当前环境可能不支持)\n");
-            } else if (i == argc - 1 && argv[i][0] != '-')
+            else if (i == argc - 1 && argv[i][0] != '-')
                 out_dir = argv[i];
         }
 
@@ -1129,8 +1132,6 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             compare_mode = true;
             compare_lat = atof(argv[++i]) * PI / 180.0;
-        } else if (strcmp(argv[i], "--gpu") == 0) {
-            printf("GPU 加速模式 (当前环境可能不支持)\n");
         }
     }
 

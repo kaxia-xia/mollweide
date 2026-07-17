@@ -157,10 +157,20 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
-    double ex = ecx + mx * rx;
+    // Wrap mx: sample from the opposite side when near the edge.
+    // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
+    double wmx = mx;
+    if (wmx > 1.0) wmx = wmx - 2.0;
+    else if (wmx < -1.0) wmx = wmx + 2.0;
+    double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
-    enhance_color(r, g, b);
+    // If the sampled pixel is black (edge of extracted texture), try the other side.
+    if (r < 4 && g < 4 && b < 4) {
+        double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
+        double ex2 = ecx + wmx2 * rx;
+        sample_bilinear(ell, ex2, ey, r, g, b);
+    }
     return true;
 }
 

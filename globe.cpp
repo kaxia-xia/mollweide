@@ -999,210 +999,246 @@ static int mode_compare(const char *input_file, double lat0,
 }
 
 // ---------------------------------------------------------------------------
-// Mode 4: Process video
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Mode 4: Process video — optimized version
-// Only detects ellipse on first frame, reuses for all subsequent frames.
-// Cleans up temp files on exit.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Mode 4: Process video — optimized version
-// Only detects ellipse on first frame, reuses bounds for all subsequent frames.
-// Cleans up temp files on exit.
+// Mode 4: Process video — streaming mode (pipe-based)
+// ffmpeg decodes → pipe raw RGB24 → C++ processes → pipe raw RGB24 → ffmpeg encodes
+// No intermediate files, processes frame by frame.
 // ---------------------------------------------------------------------------
 static int mode_video(const char *input_video, const char *output_video,
                        double lat0, const char *out_dir) {
-    printf("=== 处理视频 ===\n");
+    printf("=== 处理视频 (流式) ===\n");
     printf("输入视频: %s\n", input_video);
     printf("输出视频: %s\n", output_video);
     printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
-    printf("帧目录: %s\n\n", out_dir);
-    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
+    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n\n");
 
+    // Step 1: Probe video to get frame count and dimensions
+    printf("步骤1: 探测视频信息...\n");
     char cmd[1024];
-    char frames_dir[256], compare_dir[256];
-    snprintf(frames_dir, sizeof(frames_dir), "%s/input_frames", out_dir);
-    snprintf(compare_dir, sizeof(compare_dir), "%s/compare_frames", out_dir);
-
-    // Ensure output dirs exist
-    snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
-    system(cmd);
-    snprintf(cmd, sizeof(cmd), "mkdir -p %s", frames_dir);
-    fprintf(stderr, "DEBUG: mode_video started\n");
-    fprintf(stderr, "DEBUG: step 1\n");
-    system(cmd);
-    snprintf(cmd, sizeof(cmd), "mkdir -p %s", compare_dir);
-    system(cmd);
-    // Step 1: Extract frames from input video (with timeout)
-    printf("步骤1: 提取视频帧...\n");
     snprintf(cmd, sizeof(cmd),
-        "timeout 300 ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
-        input_video, frames_dir);
-    int ret = system(cmd);
-    if (ret != 0) {
-        fprintf(stderr, "视频帧提取可能未完成 (ffmpeg返回 %d = %d>>8)，尝试继续...\n", ret, ret>>8);
-    }
-
-    // Count frames
-    snprintf(cmd, sizeof(cmd), "ls %s/*.png 2>/dev/null | wc -l", frames_dir);
+        "ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames,r_frame_rate "
+        "-of default=noprint_wrappers=1 \"%s\" 2>/dev/null", input_video);
     FILE *fp = popen(cmd, "r");
-    int num_frames = 0;
+    int vw = 0, vh = 0, num_frames = 0;
+    double fps = 30.0;
     if (fp) {
-        char buf[32];
-        if (fgets(buf, sizeof(buf), fp)) num_frames = atoi(buf);
+        char line[128];
+        while (fgets(line, sizeof(line), fp)) {
+            char key[64], val[64];
+            if (sscanf(line, "width=%63s", val) == 1) vw = atoi(val);
+            if (sscanf(line, "height=%63s", val) == 1) vh = atoi(val);
+            if (sscanf(line, "nb_frames=%63s", val) == 1) num_frames = atoi(val);
+            if (sscanf(line, "r_frame_rate=%63s", val) == 1) {
+                int n = 0, d = 1;
+                if (sscanf(val, "%d/%d", &n, &d) == 2 && d > 0) fps = (double)n / d;
+                else fps = atof(val);
+                if (fps <= 0) fps = 30.0;
+            }
+        }
         pclose(fp);
     }
-    printf("  共 %d 帧\n", num_frames);
-    if (num_frames == 0) {
-        fprintf(stderr, "没有找到帧图片!\n");
-        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
-        system(cmd);
+    if (vw <= 0 || vh <= 0) {
+        fprintf(stderr, "无法获取视频信息\n");
+        return 1;
+    }
+    if (num_frames <= 0) {
+        // If nb_frames not available, estimate from duration
+        snprintf(cmd, sizeof(cmd),
+            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>/dev/null",
+            input_video);
+        fp = popen(cmd, "r");
+        double dur = 0;
+        if (fp) {
+            char buf[64];
+            if (fgets(buf, sizeof(buf), fp)) dur = atof(buf);
+            pclose(fp);
+        }
+        if (dur > 0) num_frames = (int)(dur * fps + 0.5);
+        else num_frames = 0;
+    }
+    printf("  分辨率: %dx%d, 帧率: %.2f, 帧数: %d\n", vw, vh, fps, num_frames);
+    if (num_frames <= 0) {
+        fprintf(stderr, "无法确定帧数\n");
         return 1;
     }
 
     // Step 2: Detect ellipse on first frame
-    printf("步骤2: 检测第一帧椭圆...\n");
-    char first_frame[256];
-    snprintf(first_frame, sizeof(first_frame), "%s/frame_0001.png", frames_dir);
-
-    Image src;
-    if (!src.load(first_frame)) {
-        fprintf(stderr, "无法加载第一帧!\n");
-        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
-        system(cmd);
+    printf("步骤2: 提取第一帧并检测椭圆...\n");
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -i \"%s\" -vframes 1 -f image2pipe -vcodec ppm - 2>/dev/null",
+        input_video);
+    fp = popen(cmd, "r");
+    if (!fp) {
+        fprintf(stderr, "无法启动 ffmpeg 提取第一帧\n");
         return 1;
     }
+    // Read PPM header
+    char ppm_header[256];
+    int ppm_w = 0, ppm_h = 0, ppm_max = 0;
+    if (!fgets(ppm_header, sizeof(ppm_header), fp) ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d %d", &ppm_w, &ppm_h) != 2 ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d", &ppm_max) != 1) {
+        pclose(fp);
+        fprintf(stderr, "无法读取第一帧 PPM 数据\n");
+        return 1;
+    }
+    Image first_frame;
+    first_frame.create(ppm_w, ppm_h);
+    size_t ppm_size = (size_t)ppm_w * ppm_h * 3;
+    size_t read_bytes = fread(first_frame.data.data(), 1, ppm_size, fp);
+    pclose(fp);
+    if (read_bytes != ppm_size) {
+        fprintf(stderr, "第一帧数据不完整 (%zu / %zu)\n", read_bytes, ppm_size);
+        return 1;
+    }
+    printf("  第一帧: %dx%d\n", ppm_w, ppm_h);
 
     double cx, cy, rx, ry;
-    if (!find_ellipse(src, cx, cy, rx, ry)) {
+    if (!find_ellipse(first_frame, cx, cy, rx, ry)) {
         fprintf(stderr, "第一帧无法找到椭圆!\n");
-        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
-        system(cmd);
         return 1;
     }
-
     Image ell;
     double ecx, ecy;
-    extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+    extract_ellipse(first_frame, cx, cy, rx, ry, ell, ecx, ecy);
 
     const int FW = 1920, FH = 1080;
     const double ER = 420.0;
     const double ECX = FW / 4.0;
     const double ECY = FH / 2.0;
 
-    // Step 3: Process all frames
-    printf("步骤3: 逐帧生成对比图 (复用椭圆边界)...\n");
-    for (int f = 1; f <= num_frames; ++f) {
-        char inp[256], outp[256];
-        snprintf(inp, sizeof(inp), "%s/frame_%04d.png", frames_dir, f);
-        snprintf(outp, sizeof(outp), "%s/frame_%04d.png", compare_dir, f);
-        Image frame_src;
-        if (!frame_src.load(inp)) {
-            fprintf(stderr, "  跳过帧 %d: 无法加载\n", f);
+    // Step 3: Stream process — ffmpeg decode → pipe → process → pipe → ffmpeg encode
+    printf("步骤3: 流式处理 %d 帧...\n", num_frames);
+
+    // Open decoder: ffmpeg → raw RGB24 pipe
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>/dev/null",
+        input_video);
+    FILE *dec_pipe = popen(cmd, "r");
+    if (!dec_pipe) {
+        fprintf(stderr, "无法启动 ffmpeg 解码器\n");
+        return 1;
+    }
+
+    // Open encoder: raw RGB24 pipe → ffmpeg → output video
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.2f -i - "
+        "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
+        "\"%s\" 2>/dev/null",
+        FW, FH, fps, output_video);
+    FILE *enc_pipe = popen(cmd, "w");
+    if (!enc_pipe) {
+        pclose(dec_pipe);
+        fprintf(stderr, "无法启动 ffmpeg 编码器\n");
+        return 1;
+    }
+
+    // Allocate reusable frame buffers
+    std::vector<unsigned char> raw_buf((size_t)vw * vh * 3);
+    Image frame_src;
+    frame_src.create(vw, vh);
+    Image frame_ell;
+    Image frame_out;
+    frame_out.create(FW, FH);
+
+    size_t frame_size_src = (size_t)vw * vh * 3;
+    size_t frame_size_out = (size_t)FW * FH * 3;
+
+    int processed = 0;
+    for (int f = 0; f < num_frames; ++f) {
+        // Read raw frame from decoder pipe
+        size_t nread = fread(raw_buf.data(), 1, frame_size_src, dec_pipe);
+        if (nread != frame_size_src) {
+            if (feof(dec_pipe)) break;
+            fprintf(stderr, "  帧 %d: 读取不完整 (%zu / %zu)\n", f+1, nread, frame_size_src);
             continue;
         }
 
-        // Extract texture from this frame using same ellipse bounds
-        Image frame_ell;
-        double fecx, fecy;
-        extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, fecx, fecy);
+        // Copy raw data into frame_src
+        memcpy(frame_src.data.data(), raw_buf.data(), frame_size_src);
 
-        Image frame_out;
-        frame_out.create(FW, FH, 0, 0, 0);
+        // Extract ellipse texture from this frame
+        extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, ecx, ecy);
 
+        // Clear output frame
+        memset(frame_out.data.data(), 0, frame_size_out);
 
         // Stars background
         generate_stars(frame_out, FW, FH, 42 + f);
 
+        // Render compare view
         double land_pct, water_pct;
         render_compare(frame_out, ECX, ECY, ER, lat0,
-                        frame_ell, fecx, fecy, rx, ry,
+                        frame_ell, ecx, ecy, rx, ry,
                         land_pct, water_pct);
 
         // Draw labels
         draw_text(frame_out, 10, 10, "0", 255, 255, 255);
         draw_text(frame_out, FW/2 + 10, 10, "180", 255, 255, 255);
 
-        // Left side: green large digits for land percentage
+        // Left side: green land percentage
         char land_text[16];
         snprintf(land_text, sizeof(land_text), "%.1f%%", land_pct);
         int land_x = (FW/4 - (int)strlen(land_text) * 27) / 2;
         for (int ci = 0; land_text[ci]; ++ci) {
-            int cx = land_x + ci * 27;
+            int cx2 = land_x + ci * 27;
             unsigned char ch = (unsigned char)land_text[ci];
             if (ch < 32) ch = 32;
             for (int row = 0; row < 8; ++row) {
                 unsigned char bits = font8x8[ch - 32][row];
                 for (int col = 0; col < 8; ++col) {
                     if (bits & (0x80 >> col)) {
-                        frame_out.set_pixel(cx + col*3, 50 + row*3, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 255, 0);
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame_out.set_pixel(cx2 + col*3 + dx, 50 + row*3 + dy, 0, 255, 0);
                     }
                 }
             }
         }
 
-        // Right side: blue large digits for water percentage
+        // Right side: blue water percentage
         char water_text[16];
         snprintf(water_text, sizeof(water_text), "%.1f%%", water_pct);
         int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 27) / 2;
         for (int ci = 0; water_text[ci]; ++ci) {
-            int cx = water_x + ci * 27;
+            int cx2 = water_x + ci * 27;
             unsigned char ch = (unsigned char)water_text[ci];
             if (ch < 32) ch = 32;
             for (int row = 0; row < 8; ++row) {
                 unsigned char bits = font8x8[ch - 32][row];
                 for (int col = 0; col < 8; ++col) {
                     if (bits & (0x80 >> col)) {
-                        frame_out.set_pixel(cx + col*3, 50 + row*3, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 100, 255);
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame_out.set_pixel(cx2 + col*3 + dx, 50 + row*3 + dy, 0, 100, 255);
                     }
                 }
             }
         }
 
-        frame_out.save_png(outp);
+        // Write raw RGB24 to encoder pipe
+        fwrite(frame_out.data.data(), 1, frame_size_out, enc_pipe);
 
-
-        if (f % 30 == 0 || f == num_frames)
-            printf("  帧 %4d/%d\n", f, num_frames);
+        processed++;
+        if (processed % 30 == 0 || processed == num_frames)
+            printf("  帧 %4d/%d\n", processed, num_frames);
     }
 
-    // Step 4: Re-encode video
-    printf("步骤4: 合成新视频...\n");
-    snprintf(cmd, sizeof(cmd),
-        "ffmpeg -y -framerate 30 -i %s/frame_%%04d.png "
-        "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
-        "\"%s\" 2>/dev/null",
-        compare_dir, output_video);
-    ret = system(cmd);
-    if (ret == 0) {
+    // Close pipes
+    pclose(dec_pipe);
+    int enc_ret = pclose(enc_pipe);
+
+    printf("\n完成! 处理 %d 帧\n", processed);
+    if (enc_ret == 0) {
         printf("视频已保存: %s\n", output_video);
     } else {
-        fprintf(stderr, "视频合成失败 (ffmpeg返回 %d = %d>>8)\n", ret, ret>>8);
+        fprintf(stderr, "视频合成可能有问题 (ffmpeg返回 %d = %d>>8)\n", enc_ret, enc_ret>>8);
     }
 
-    // Cleanup temp files
-    printf("清理临时文件...\n");
-    snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
-    system(cmd);
-    return ret == 0 ? 0 : 1;
+    return enc_ret == 0 ? 0 : 1;
 }
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);

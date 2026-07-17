@@ -1099,15 +1099,65 @@ static int mode_video(const char *input_video, const char *output_video,
         // Extract texture from this frame using same ellipse bounds
         Image frame_ell;
         double fecx, fecy;
-        extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, fecx, fecy);
-
         Image frame_out;
         frame_out.create(FW, FH, 0, 0, 0);
+
+        // Stars background
+        generate_stars(frame_out, FW, FH, 42 + f);
 
         double land_pct, water_pct;
         render_compare(frame_out, ECX, ECY, ER, lat0,
                         frame_ell, fecx, fecy, rx, ry,
                         land_pct, water_pct);
+
+        // Draw labels
+        draw_text(frame_out, 10, 10, "0", 255, 255, 255);
+        draw_text(frame_out, FW/2 + 10, 10, "180", 255, 255, 255);
+
+        // Left side: green large digits for land percentage
+        char land_text[16];
+        snprintf(land_text, sizeof(land_text), "%.1f%%", land_pct);
+        int land_x = (FW/4 - (int)strlen(land_text) * 18) / 2;
+        for (int ci = 0; land_text[ci]; ++ci) {
+            int cx = land_x + ci * 18;
+            unsigned char ch = (unsigned char)land_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        frame_out.set_pixel(cx + col*2, 50 + row*2, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 255, 0);
+                    }
+                }
+            }
+        }
+
+        // Right side: blue large digits for water percentage
+        char water_text[16];
+        snprintf(water_text, sizeof(water_text), "%.1f%%", water_pct);
+        int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 18) / 2;
+        for (int ci = 0; water_text[ci]; ++ci) {
+            int cx = water_x + ci * 18;
+            unsigned char ch = (unsigned char)water_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        frame_out.set_pixel(cx + col*2, 50 + row*2, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 100, 255);
+                    }
+                }
+            }
+        }
+
+        frame_out.save_png(outp);
+
 
         frame_out.save_png(outp);
 

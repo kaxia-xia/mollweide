@@ -122,10 +122,26 @@ build/globe --video input.mp4 -o output.mp4 --vl 27
 2. 对每一帧自动检测椭圆、提取纹理、生成双视角对比图
 3. 合成新视频（无声音，`-an`）
 
+
+### 9. 紫色辉光奇幻模式
+
+```bash
+build/globe test/test5.jpg --purple
+build/globe test/test5.jpg --compare 27 --purple
+build/globe test/test5.jpg -f --lon 180 --purple
+build/globe --video input.mp4 -o output.mp4 --vl 27 --purple
+```
+
+在任意模式后加上 `--purple` 参数，即可启用紫色辉光奇幻效果：
+- **大陆**：发出明亮的紫色/品红色辉光
+- **海洋**：变为较暗的紫色/靛蓝色
+- **大气辉光**：变为紫色调
+
+
 ### 完整参数列表
 
 ```
-用法: build/globe <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度]
+用法: build/globe <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度] [--purple]
 
 位置参数:
   输入图片         摩尔维特投影的世界地图图片
@@ -141,6 +157,7 @@ build/globe --video input.mp4 -o output.mp4 --vl 27
   --compare 纬度   生成0°和180°并排对比图，参数为观察纬度
   --video 视频文件 输入视频文件，逐帧处理为对比图再合成新视频
   --vl 纬度        配合 --video 使用，指定观察纬度（默认0）
+  --purple         紫色辉光奇幻模式，大陆发出紫色辉光，海洋变为暗紫色
 ```
 
 ## 输出规格

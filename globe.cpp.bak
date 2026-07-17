@@ -25,8 +25,6 @@
 
 constexpr double PI = 3.14159265358979323846;
 constexpr double SHRINK = 0.966;
-bool purple_mode = false;
-
 
 // ---------------------------------------------------------------------------
 // Image helper
@@ -150,51 +148,6 @@ static void enhance_color(unsigned char &r, unsigned char &g, unsigned char &b) 
     g = (unsigned char)std::clamp((int)ng, 0, 255);
     b = (unsigned char)std::clamp((int)nb, 0, 255);
 }
-
-// ---------------------------------------------------------------------------
-// Purple glow fantasy mode — land becomes glowing purple, ocean becomes dark purple
-// ---------------------------------------------------------------------------
-static void apply_purple_glow(unsigned char &r, unsigned char &g, unsigned char &b) {
-    int maxc = std::max({r, g, b});
-    if (maxc < 2) return;
-
-    // Determine if this is land or water based on original color characteristics
-    // Water: blue dominant, or near-white (sea foam), or light green (shallow), or dark red (deep)
-    bool water = false;
-    int ri = r, gi = g, bi = b;
-    // Pure white or near white
-    if (ri > 240 && gi > 240 && bi > 240) water = true;
-    // Sea blue: blue dominant, low brightness
-    else if (bi > ri && bi > gi && bi > 30 && ri < 100 && gi < 100) water = true;
-    // Light green: green dominant
-    else if (gi > ri && gi > bi && gi > 80 && ri < 150 && bi < 150) water = true;
-    // Dark red: red dominant, low brightness
-    else if (ri > gi && ri > bi && ri > 30 && gi < 80 && bi < 80) water = true;
-
-    if (water) {
-        // Ocean: dark purple / indigo
-        // Map brightness to purple intensity
-        double bright = maxc / 255.0;
-        r = (unsigned char)std::clamp((int)(40 + bright * 60), 0, 255);
-        g = (unsigned char)std::clamp((int)(10 + bright * 30), 0, 255);
-        b = (unsigned char)std::clamp((int)(60 + bright * 80), 0, 255);
-    } else {
-        // Land: bright glowing purple / magenta
-        double bright = maxc / 255.0;
-        double glow = 0.7 + 0.5 * bright;
-        // Purple-magenta glow: high red and blue, low green
-        r = (unsigned char)std::clamp((int)(120 + bright * 100), 0, 255);
-        g = (unsigned char)std::clamp((int)(20 + bright * 40), 0, 255);
-        b = (unsigned char)std::clamp((int)(160 + bright * 95), 0, 255);
-        // Add extra glow for brighter areas
-        if (bright > 0.5) {
-            int extra = (int)((bright - 0.5) * 2.0 * 60);
-            r = std::min(255, r + extra);
-            b = std::min(255, b + extra);
-        }
-    }
-}
-
 
 // ---------------------------------------------------------------------------
 // Sample from ellipse texture
@@ -418,8 +371,6 @@ static void render_frame(Image &frame,
                 r = (unsigned char)std::clamp((int)(r * glow), 0, 255);
                 g = (unsigned char)std::clamp((int)(g * glow), 0, 255);
                 b = (unsigned char)std::clamp((int)(b * glow), 0, 255);
-                if (purple_mode) apply_purple_glow(r, g, b);
-
                 frame.set_pixel(px, py, r, g, b);
             }
         }
@@ -435,20 +386,13 @@ static void render_frame(Image &frame,
                 double alpha = 1.0 - std::abs(dist - 1.0) / 0.07;
                 int glow = (int)(40 * alpha * alpha);
                 auto p = frame.pix(px, py);
-                if (purple_mode) {
-                    p[0] = std::min(255, p[0] + glow + 30);
-                    p[1] = std::min(255, p[1] + glow/2);
-                    p[2] = std::min(255, p[2] + glow + 60);
-                } else {
-                    p[0] = std::min(255, p[0] + glow);
-                    p[1] = std::min(255, p[1] + glow);
-                    p[2] = std::min(255, p[2] + glow + 40);
-                }
+                p[0] = std::min(255, p[0] + glow);
+                p[1] = std::min(255, p[1] + glow);
+                p[2] = std::min(255, p[2] + glow + 40);
             }
         }
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Render a single frame at given lon0/lat0 (no stars, no atmosphere glow)
@@ -493,8 +437,6 @@ static void render_single(Image &frame,
 
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
-                if (purple_mode) apply_purple_glow(r, g, b);
-
                 frame.set_pixel(px, py, r, g, b);
             }
         }
@@ -562,16 +504,9 @@ static void render_compare(Image &frame,
 
             double mx, my;
             mollweide_forward(lat, lon, mx, my);
+
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
-                total_pixels++;
-                if (!is_water_pixel(&r)) land_pixels++;
-                if (purple_mode) apply_purple_glow(r, g, b);
-                frame.set_pixel(px, py, r, g, b);
-            }
-
-                if (purple_mode) apply_purple_glow(r, g, b);
-
                 frame.set_pixel(px, py, r, g, b);
                 total_pixels++;
                 if (!is_water_pixel(&r)) land_pixels++;
@@ -611,8 +546,6 @@ static void render_compare(Image &frame,
 
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
-                if (purple_mode) apply_purple_glow(r, g, b);
-
                 frame.set_pixel(px, py, r, g, b);
                 total_pixels++;
                 if (!is_water_pixel(&r)) land_pixels++;
@@ -787,7 +720,7 @@ static void print_usage(const char *prog) {
         "  --lat 纬度       指定视角纬度，与 --lon 配合使用\n"
         "  --compare 纬度   生成0°和180°并排对比图，参数为观察纬度\n"
         "  --video 视频文件 输入视频文件，逐帧处理为对比图再合成新视频\n"
-        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n  --purple         紫色辉光奇幻模式，大陆发出紫色辉光，海洋变为暗紫色\n",
+        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n",
         prog);
 }
 
@@ -800,8 +733,6 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
     printf("输入: %s\n", input_file);
     printf("帧数: %d\n", num_frames);
     printf("纬度: %.1f\n", -lat0 * 180 / PI);
-    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
-
     printf("输出目录: %s\n\n", out_dir);
 
     char cmd[256];
@@ -879,8 +810,6 @@ static int mode_single(const char *input_file, double lon0, double lat0,
     printf("输入: %s\n", input_file);
     printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
-    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
-
 
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
@@ -930,8 +859,6 @@ static int mode_single(const char *input_file, double lon0, double lat0,
 static int mode_compare(const char *input_file, double lat0,
                          const char *out_dir) {
     printf("=== 生成双视角对比图 ===\n");
-    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
-
     printf("输入: %s\n", input_file);
     printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
@@ -1049,8 +976,6 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("输出视频: %s\n", output_video);
     printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     printf("帧目录: %s\n\n", out_dir);
-    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
-
 
     char cmd[1024];
     char frames_dir[256], compare_dir[256];
@@ -1249,10 +1174,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             compare_mode = true;
             compare_lat = -atof(argv[++i]) * PI / 180.0;
-        } else if (strcmp(argv[i], "--purple") == 0)
-            purple_mode = true;
-
-
+        }
     }
 
     if (compare_mode)

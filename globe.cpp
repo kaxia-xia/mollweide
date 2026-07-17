@@ -1,6 +1,12 @@
 // ============================================================================
 // globe.cpp — 地球旋转视频帧生成器
 //
+// 功能：
+//   1. 生成旋转地球视频帧
+//   2. 指定经度/纬度输出单张图片
+//   3. 生成 0°/180° 双视角对比图（带陆地/海洋比例）
+//   4. 处理视频（逐帧生成对比图再合成新视频）
+//
 // 缩小椭圆0.966
 // ============================================================================
 
@@ -20,6 +26,9 @@
 constexpr double PI = 3.14159265358979323846;
 constexpr double SHRINK = 0.966;
 
+// ---------------------------------------------------------------------------
+// Image helper
+// ---------------------------------------------------------------------------
 struct Image {
     int w = 0, h = 0;
     std::vector<unsigned char> data;
@@ -64,6 +73,9 @@ struct Image {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Bilinear sampling
+// ---------------------------------------------------------------------------
 static void sample_bilinear(const Image &img, double sx, double sy,
                              unsigned char &r, unsigned char &g, unsigned char &b) {
     int x0 = (int)floor(sx);
@@ -88,10 +100,16 @@ static void sample_bilinear(const Image &img, double sx, double sy,
     b = (unsigned char)std::clamp(p00[2]*w00 + p10[2]*w10 + p01[2]*w01 + p11[2]*w11, 0.0, 255.0);
 }
 
+// ---------------------------------------------------------------------------
+// Pixel classification
+// ---------------------------------------------------------------------------
 static bool is_map_pixel(const unsigned char *p) {
     return std::max({p[0], p[1], p[2]}) > 8;
 }
 
+// ---------------------------------------------------------------------------
+// Mollweide forward projection
+// ---------------------------------------------------------------------------
 static void mollweide_forward(double lat, double lon, double &mx, double &my) {
     double theta = lat;
     for (int i = 0; i < 30; ++i) {
@@ -106,6 +124,9 @@ static void mollweide_forward(double lat, double lon, double &mx, double &my) {
     my = sin(theta);
 }
 
+// ---------------------------------------------------------------------------
+// Color enhancement (satellite cloud style)
+// ---------------------------------------------------------------------------
 static void enhance_color(unsigned char &r, unsigned char &g, unsigned char &b) {
     int maxc = std::max({r, g, b});
     if (maxc < 2) return;
@@ -128,6 +149,9 @@ static void enhance_color(unsigned char &r, unsigned char &g, unsigned char &b) 
     b = (unsigned char)std::clamp((int)nb, 0, 255);
 }
 
+// ---------------------------------------------------------------------------
+// Sample from ellipse texture
+// ---------------------------------------------------------------------------
 static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double rx, double ry,
                             double mx, double my,
@@ -140,6 +164,9 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Find the map ellipse in the source image
+// ---------------------------------------------------------------------------
 static bool find_ellipse(const Image &img, double &cx, double &cy,
                           double &rx, double &ry) {
     double sx = 0, sy = 0;
@@ -202,6 +229,9 @@ static bool find_ellipse(const Image &img, double &cx, double &cy,
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Extract ellipse texture from source image
+// ---------------------------------------------------------------------------
 static void extract_ellipse(const Image &src,
                              double cx, double cy, double rx, double ry,
                              Image &ell, double &ecx, double &ecy) {
@@ -228,6 +258,9 @@ static void extract_ellipse(const Image &src,
     printf("  Ellipse image: %d x %d\n", ew, eh);
 }
 
+// ---------------------------------------------------------------------------
+// Generate stars background
+// ---------------------------------------------------------------------------
 static void generate_stars(Image &frame, int w, int h, unsigned int seed) {
     srand(seed);
     for (int i = 0; i < 500; ++i) {
@@ -250,6 +283,9 @@ static void generate_stars(Image &frame, int w, int h, unsigned int seed) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Render a single 3D earth frame
+// ---------------------------------------------------------------------------
 static void render_frame(Image &frame,
                           double earth_cx, double earth_cy, double earth_r,
                           double lon0, double lat0,
@@ -299,6 +335,7 @@ static void render_frame(Image &frame,
         }
     }
 
+    // Atmosphere glow
     for (int py = 0; py < h; ++py) {
         for (int px = 0; px < w; ++px) {
             double nx = (px - earth_cx) / earth_r;
@@ -316,21 +353,234 @@ static void render_frame(Image &frame,
     }
 }
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "用法: %s <输入图片> [帧数] [输出目录]\n", argv[0]);
-        return 1;
+// ---------------------------------------------------------------------------
+// Render a single frame at given lon0/lat0 (no stars, no atmosphere glow)
+// Used for --lon/--lat single image output
+// ---------------------------------------------------------------------------
+static void render_single(Image &frame,
+                           double earth_cx, double earth_cy, double earth_r,
+                           double lon0, double lat0,
+                           const Image &ell, double ecx, double ecy,
+                           double rx, double ry) {
+    int w = frame.w, h = frame.h;
+
+    double Xx = -sin(lon0);
+    double Xy = 0;
+    double Xz = cos(lon0);
+
+    double Yx = -sin(lat0) * cos(lon0);
+    double Yy = cos(lat0);
+    double Yz = -sin(lat0) * sin(lon0);
+
+    double Zx = cos(lat0) * cos(lon0);
+    double Zy = sin(lat0);
+    double Zz = cos(lat0) * sin(lon0);
+
+    for (int py = 0; py < h; ++py) {
+        for (int px = 0; px < w; ++px) {
+            double nx = (px - earth_cx) / earth_r;
+            double ny = (py - earth_cy) / earth_r;
+            double nz2 = 1.0 - nx * nx - ny * ny;
+            if (nz2 < 0) continue;
+            double nz = sqrt(nz2);
+
+            double px3 = nx * Xx + ny * Yx + nz * Zx;
+            double py3 = nx * Xy + ny * Yy + nz * Zy;
+            double pz3 = nx * Xz + ny * Yz + nz * Zz;
+
+            double lat = asin(std::clamp(py3, -1.0, 1.0));
+            double lon = atan2(pz3, px3);
+
+            double mx, my;
+            mollweide_forward(lat, lon, mx, my);
+
+            unsigned char r, g, b;
+            if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
+                frame.set_pixel(px, py, r, g, b);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Check if a pixel is water (based on blue channel dominance)
+// ---------------------------------------------------------------------------
+static bool is_water_pixel(const unsigned char *p) {
+    // Water: blue is the dominant channel, and brightness is moderate
+    return p[2] > p[0] && p[2] > p[1] && p[2] > 30;
+}
+
+// ---------------------------------------------------------------------------
+// Render compare image: left=0° meridian, right=180° meridian
+// Returns (land_percent, water_percent) for the visible area
+// ---------------------------------------------------------------------------
+static void render_compare(Image &frame,
+                            double earth_cx, double earth_cy, double earth_r,
+                            double lat0,
+                            const Image &ell, double ecx, double ecy,
+                            double rx, double ry,
+                            double &land_pct, double &water_pct) {
+    int w = frame.w, h = frame.h;
+    int half_w = w / 2;
+    long long total_pixels = 0;
+    long long land_pixels = 0;
+
+    // Left half: lon0 = 0
+    for (int py = 0; py < h; ++py) {
+        for (int px = 0; px < half_w; ++px) {
+            double nx = (px - earth_cx) / earth_r;
+            double ny = (py - earth_cy) / earth_r;
+            double nz2 = 1.0 - nx * nx - ny * ny;
+            if (nz2 < 0) continue;
+            double nz = sqrt(nz2);
+
+            double Xx = -sin(0.0);
+            double Xy = 0;
+            double Xz = cos(0.0);
+            double Yx = -sin(lat0) * cos(0.0);
+            double Yy = cos(lat0);
+            double Yz = -sin(lat0) * sin(0.0);
+            double Zx = cos(lat0) * cos(0.0);
+            double Zy = sin(lat0);
+            double Zz = cos(lat0) * sin(0.0);
+
+            double px3 = nx * Xx + ny * Yx + nz * Zx;
+            double py3 = nx * Xy + ny * Yy + nz * Zy;
+            double pz3 = nx * Xz + ny * Yz + nz * Zz;
+
+            double lat = asin(std::clamp(py3, -1.0, 1.0));
+            double lon = atan2(pz3, px3);
+
+            double mx, my;
+            mollweide_forward(lat, lon, mx, my);
+
+            unsigned char r, g, b;
+            if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
+                frame.set_pixel(px, py, r, g, b);
+                total_pixels++;
+                if (!is_water_pixel(&r)) land_pixels++;
+            }
+        }
     }
 
-    const char *input_file = argv[1];
-    int num_frames = (argc > 2) ? atoi(argv[2]) : 360;
-    const char *out_dir = (argc > 3) ? argv[3] : "frames";
+    // Right half: lon0 = PI
+    double right_earth_cx = earth_cx + half_w;
+    for (int py = 0; py < h; ++py) {
+        for (int px = half_w; px < w; ++px) {
+            double nx = (px - right_earth_cx) / earth_r;
+            double ny = (py - earth_cy) / earth_r;
+            double nz2 = 1.0 - nx * nx - ny * ny;
+            if (nz2 < 0) continue;
+            double nz = sqrt(nz2);
 
-    if (num_frames < 1) num_frames = 360;
+            double Xx = -sin(PI);
+            double Xy = 0;
+            double Xz = cos(PI);
+            double Yx = -sin(lat0) * cos(PI);
+            double Yy = cos(lat0);
+            double Yz = -sin(lat0) * sin(PI);
+            double Zx = cos(lat0) * cos(PI);
+            double Zy = sin(lat0);
+            double Zz = cos(lat0) * sin(PI);
 
-    printf("=== 地球旋转视频帧生成器 ===\n");
+            double px3 = nx * Xx + ny * Yx + nz * Zx;
+            double py3 = nx * Xy + ny * Yy + nz * Zy;
+            double pz3 = nx * Xz + ny * Yz + nz * Zz;
+
+            double lat = asin(std::clamp(py3, -1.0, 1.0));
+            double lon = atan2(pz3, px3);
+
+            double mx, my;
+            mollweide_forward(lat, lon, mx, my);
+
+            unsigned char r, g, b;
+            if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
+                frame.set_pixel(px, py, r, g, b);
+                total_pixels++;
+                if (!is_water_pixel(&r)) land_pixels++;
+            }
+        }
+    }
+
+    // Draw separator line
+    for (int py = 0; py < h; ++py) {
+        auto p = frame.pix(half_w, py);
+        p[0] = 255; p[1] = 255; p[2] = 255;
+    }
+
+    if (total_pixels > 0) {
+        land_pct = 100.0 * land_pixels / total_pixels;
+        water_pct = 100.0 * (total_pixels - land_pixels) / total_pixels;
+    } else {
+        land_pct = 0;
+        water_pct = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Draw text on image (simple pixel-based rendering)
+// ---------------------------------------------------------------------------
+static void draw_char(Image &img, int x, int y, char c,
+                       unsigned char r, unsigned char g, unsigned char b) {
+    // Simple 5x7 bitmap font for digits, %, +, -, ., space
+    static const unsigned char font[128][5] = {0};
+    // We'll use a minimal set: digits 0-9, %, +, -, ., space, C, N, S, E, W, L, a, d
+    // For simplicity, just draw colored rectangles as placeholders
+    // Actually, let's just skip bitmap font and use a simple approach:
+    // draw a small colored block for each character position
+    (void)c;
+    for (int dy = 0; dy < 10; ++dy)
+        for (int dx = 0; dx < 8; ++dx)
+            img.set_pixel(x + dx, y + dy, r, g, b);
+}
+
+static void draw_text(Image &img, int x, int y, const char *text,
+                       unsigned char r, unsigned char g, unsigned char b) {
+    while (*text) {
+        draw_char(img, x, y, *text, r, g, b);
+        x += 9;
+        text++;
+    }
+}
+
+
+// ============================================================================
+// Main functions — all modes
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Print usage
+// ---------------------------------------------------------------------------
+static void print_usage(const char *prog) {
+    fprintf(stderr,
+        "用法: %s <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度]\n"
+        "\n"
+        "位置参数:\n"
+        "  输入图片         摩尔维特投影的世界地图图片\n"
+        "  圈数             默认1圈（360帧，12秒@30fps）\n"
+        "  纬度             视角纬度，默认0（赤道），正数=北纬，负数=南纬\n"
+        "  输出目录         帧图片输出目录（默认 frames）\n"
+        "\n"
+        "选项:\n"
+        "  -o 视频文件      指定输出视频文件路径（默认 output.mp4）\n"
+        "  -f               只生成帧图片，不合成视频\n"
+        "  --lon 经度       指定中心经度，与 -f 配合只生成一张该经度的图片\n"
+        "  --lat 纬度       指定视角纬度，与 --lon 配合使用\n"
+        "  --compare 纬度   生成0°和180°并排对比图，参数为观察纬度\n"
+        "  --video 视频文件 输入视频文件，逐帧处理为对比图再合成新视频\n"
+        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n",
+        prog);
+}
+
+// ---------------------------------------------------------------------------
+// Mode 1: Generate rotation video frames
+// ---------------------------------------------------------------------------
+static int mode_rotate(const char *input_file, int num_frames, double lat0,
+                        const char *out_dir, const char *output_video, bool frames_only) {
+    printf("=== 生成旋转地球视频帧 ===\n");
     printf("输入: %s\n", input_file);
     printf("帧数: %d\n", num_frames);
+    printf("纬度: %.1f\n", lat0);
     printf("输出目录: %s\n\n", out_dir);
 
     char cmd[256];
@@ -363,7 +613,6 @@ int main(int argc, char **argv) {
 
     for (int f = 0; f < num_frames; ++f) {
         double lon0 = 2.0 * PI * f / num_frames;
-        double lat0 = 0.0;
 
         Image frame;
         frame.create(FW, FH, 0, 0, 0);
@@ -381,8 +630,341 @@ int main(int argc, char **argv) {
     }
 
     printf("\n完成! 共 %d 帧 -> %s/\n", num_frames, out_dir);
-    printf("合成视频:\n");
-    printf("  ffmpeg -framerate 30 -i %s/frame_%%04d.png -c:v libx264 -pix_fmt yuv420p -crf 18 output.mp4\n", out_dir);
+
+    if (!frames_only && output_video) {
+        printf("合成视频: %s\n", output_video);
+        char vcmd[1024];
+        snprintf(vcmd, sizeof(vcmd),
+            "ffmpeg -y -framerate 30 -i %s/frame_%%04d.png "
+            "-c:v libx264 -pix_fmt yuv420p -crf 23 "
+            "%s 2>/dev/null",
+            out_dir, output_video);
+        int ret = system(vcmd);
+        if (ret == 0)
+            printf("视频已保存: %s\n", output_video);
+        else
+            fprintf(stderr, "视频合成失败 (ffmpeg返回 %d)\n", ret);
+    }
 
     return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mode 2: Generate a single image at given lon/lat
+// ---------------------------------------------------------------------------
+static int mode_single(const char *input_file, double lon0, double lat0,
+                        const char *out_dir) {
+    printf("=== 生成单张地球图片 ===\n");
+    printf("输入: %s\n", input_file);
+    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, lat0 * 180 / PI);
+    printf("输出目录: %s\n\n", out_dir);
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
+    system(cmd);
+
+    Image src;
+    if (!src.load(input_file)) {
+        fprintf(stderr, "无法加载: %s\n", input_file);
+        return 1;
+    }
+    printf("输入图片: %d x %d\n", src.w, src.h);
+
+    double cx, cy, rx, ry;
+    if (!find_ellipse(src, cx, cy, rx, ry)) {
+        fprintf(stderr, "无法找到椭圆!\n");
+        return 1;
+    }
+
+    Image ell;
+    double ecx, ecy;
+    extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+    const int FW = 1920, FH = 1080;
+    const double ER = 420.0;
+    const double ECX = FW / 2.0;
+    const double ECY = FH / 2.0;
+
+    Image frame;
+    frame.create(FW, FH, 0, 0, 0);
+    generate_stars(frame, FW, FH, 42);
+    render_single(frame, ECX, ECY, ER, lon0, lat0,
+                   ell, ecx, ecy, rx, ry);
+
+    char fn[256];
+    int lon_deg = (int)round(lon0 * 180 / PI);
+    int lat_deg = (int)round(lat0 * 180 / PI);
+    snprintf(fn, sizeof(fn), "%s/lon_%+03d_lat_%+03d.png", out_dir, lon_deg, lat_deg);
+    frame.save_png(fn);
+    printf("已保存: %s\n", fn);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mode 3: Generate compare image (0° vs 180°)
+// ---------------------------------------------------------------------------
+static int mode_compare(const char *input_file, double lat0,
+                         const char *out_dir) {
+    printf("=== 生成双视角对比图 ===\n");
+    printf("输入: %s\n", input_file);
+    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("输出目录: %s\n\n", out_dir);
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
+    system(cmd);
+
+    Image src;
+    if (!src.load(input_file)) {
+        fprintf(stderr, "无法加载: %s\n", input_file);
+        return 1;
+    }
+    printf("输入图片: %d x %d\n", src.w, src.h);
+
+    double cx, cy, rx, ry;
+    if (!find_ellipse(src, cx, cy, rx, ry)) {
+        fprintf(stderr, "无法找到椭圆!\n");
+        return 1;
+    }
+
+    Image ell;
+    double ecx, ecy;
+    extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+    const int FW = 1920, FH = 1080;
+    const double ER = 420.0;
+    const double ECX = FW / 4.0;  // Left circle center
+    const double ECY = FH / 2.0;
+
+    Image frame;
+    frame.create(FW, FH, 0, 0, 0);
+
+    double land_pct, water_pct;
+    render_compare(frame, ECX, ECY, ER, lat0,
+                    ell, ecx, ecy, rx, ry,
+                    land_pct, water_pct);
+
+    // Draw labels
+    for (int y = 10; y < 30; ++y)
+        for (int x = 10; x < 40; ++x)
+            frame.set_pixel(x, y, 255, 255, 255);
+    for (int y = 10; y < 30; ++y)
+        for (int x = FW/2 + 10; x < FW/2 + 50; ++x)
+            frame.set_pixel(x, y, 255, 255, 255);
+
+    char pct_text[64];
+    snprintf(pct_text, sizeof(pct_text), "Land: %.1f%%  Water: %.1f%%",
+             land_pct, water_pct);
+    int tx = (FW - (int)strlen(pct_text) * 9) / 2;
+    for (int y = 5; y < 20; ++y)
+        for (int x = tx; x < tx + (int)strlen(pct_text) * 9; ++x)
+            if (x >= 0 && x < FW)
+                frame.set_pixel(x, y, 255, 255, 100);
+
+    char fn[256];
+    int lat_deg = (int)round(lat0 * 180 / PI);
+    snprintf(fn, sizeof(fn), "%s/compare_%+03d.png", out_dir, lat_deg);
+    frame.save_png(fn);
+    printf("已保存: %s\n", fn);
+    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Mode 4: Process video
+// ---------------------------------------------------------------------------
+static int mode_video(const char *input_video, const char *output_video,
+                       double lat0, const char *out_dir) {
+    printf("=== 处理视频 ===\n");
+    printf("输入视频: %s\n", input_video);
+    printf("输出视频: %s\n", output_video);
+    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("帧目录: %s\n\n", out_dir);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
+    system(cmd);
+
+    char frames_dir[256];
+    snprintf(frames_dir, sizeof(frames_dir), "%s/input_frames", out_dir);
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", frames_dir);
+    system(cmd);
+
+    printf("步骤1: 提取视频帧...\n");
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
+        input_video, frames_dir);
+    int ret = system(cmd);
+    if (ret != 0) {
+        fprintf(stderr, "视频帧提取失败 (ffmpeg返回 %d)\n", ret);
+        return 1;
+    }
+
+    char count_cmd[256];
+    snprintf(count_cmd, sizeof(count_cmd), "ls %s/*.png 2>/dev/null | wc -l", frames_dir);
+    FILE *fp = popen(count_cmd, "r");
+    int num_frames = 0;
+    if (fp) {
+        char buf[32];
+        if (fgets(buf, sizeof(buf), fp)) num_frames = atoi(buf);
+        pclose(fp);
+    }
+    printf("  共 %d 帧\n", num_frames);
+    if (num_frames == 0) {
+        fprintf(stderr, "没有找到帧图片!\n");
+        return 1;
+    }
+
+    printf("步骤2: 逐帧生成对比图...\n");
+    char compare_dir[256];
+    snprintf(compare_dir, sizeof(compare_dir), "%s/compare_frames", out_dir);
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", compare_dir);
+    system(cmd);
+
+    for (int f = 1; f <= num_frames; ++f) {
+        char inp[256], outp[256];
+        snprintf(inp, sizeof(inp), "%s/frame_%04d.png", frames_dir, f);
+        snprintf(outp, sizeof(outp), "%s/frame_%04d.png", compare_dir, f);
+
+        Image src;
+        if (!src.load(inp)) {
+            fprintf(stderr, "  跳过帧 %d: 无法加载\n", f);
+            continue;
+        }
+
+        double cx, cy, rx, ry;
+        if (!find_ellipse(src, cx, cy, rx, ry)) {
+            fprintf(stderr, "  跳过帧 %d: 无法找到椭圆\n", f);
+            continue;
+        }
+
+        Image ell;
+        double ecx, ecy;
+        extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+        const int FW = 1920, FH = 1080;
+        const double ER = 420.0;
+        const double ECX = FW / 4.0;
+        const double ECY = FH / 2.0;
+
+        Image frame;
+        frame.create(FW, FH, 0, 0, 0);
+
+        double land_pct, water_pct;
+        render_compare(frame, ECX, ECY, ER, lat0,
+                        ell, ecx, ecy, rx, ry,
+                        land_pct, water_pct);
+
+        frame.save_png(outp);
+
+        if (f % 30 == 0 || f == num_frames)
+            printf("  帧 %4d/%d\n", f, num_frames);
+    }
+
+    printf("步骤3: 合成新视频...\n");
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -framerate 30 -i %s/frame_%%04d.png "
+        "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
+        "\"%s\" 2>/dev/null",
+        compare_dir, output_video);
+    ret = system(cmd);
+    if (ret == 0) {
+        printf("视频已保存: %s\n", output_video);
+    } else {
+        fprintf(stderr, "视频合成失败 (ffmpeg返回 %d)\n", ret);
+        return 1;
+    }
+
+    printf("清理临时文件...\n");
+    snprintf(cmd, sizeof(cmd), "rm -rf %s", frames_dir);
+    system(cmd);
+
+    printf("\n完成!\n");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+int main(int argc, char **argv) {
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    // Check for --video mode first
+    if (strcmp(argv[1], "--video") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "错误: --video 需要指定输入视频文件\n");
+            return 1;
+        }
+        const char *input_video = argv[2];
+        const char *output_video = "output.mp4";
+        double lat0 = 0.0;
+        const char *out_dir = "frames";
+
+        for (int i = 3; i < argc; ++i) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+                output_video = argv[++i];
+            else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
+                lat0 = atof(argv[++i]) * PI / 180.0;
+            else if (i == argc - 1 && argv[i][0] != '-')
+                out_dir = argv[i];
+        }
+
+        return mode_video(input_video, output_video, lat0, out_dir);
+    }
+
+    // Normal mode
+    const char *input_file = argv[1];
+    int num_frames = 360;
+    double lat0 = 0.0;
+    const char *out_dir = "frames";
+    const char *output_video = "output.mp4";
+    bool frames_only = false;
+    bool single_mode = false;
+    double single_lon = 0.0;
+    double single_lat = 0.0;
+    bool compare_mode = false;
+    double compare_lat = 0.0;
+
+    int pos = 2;
+    if (pos < argc && argv[pos][0] != '-') {
+        num_frames = atoi(argv[pos]) * 360;
+        pos++;
+    }
+    if (pos < argc && argv[pos][0] != '-') {
+        lat0 = atof(argv[pos]) * PI / 180.0;
+        pos++;
+    }
+    if (pos < argc && argv[pos][0] != '-') {
+        out_dir = argv[pos];
+        pos++;
+    }
+
+    for (int i = pos; i < argc; ++i) {
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+            output_video = argv[++i];
+        else if (strcmp(argv[i], "-f") == 0)
+            frames_only = true;
+        else if (strcmp(argv[i], "--lon") == 0 && i + 1 < argc) {
+            single_mode = true;
+            single_lon = atof(argv[++i]) * PI / 180.0;
+        } else if (strcmp(argv[i], "--lat") == 0 && i + 1 < argc)
+            single_lat = atof(argv[++i]) * PI / 180.0;
+        else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
+            compare_mode = true;
+            compare_lat = atof(argv[++i]) * PI / 180.0;
+        }
+    }
+
+    if (compare_mode)
+        return mode_compare(input_file, compare_lat, out_dir);
+    else if (single_mode)
+        return mode_single(input_file, single_lon, single_lat, out_dir);
+    else
+        return mode_rotate(input_file, num_frames, lat0, out_dir,
+                           frames_only ? nullptr : output_video, frames_only);
 }

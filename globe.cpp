@@ -825,7 +825,7 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         if (ret == 0)
             printf("视频已保存: %s\n", output_video);
         else
-            fprintf(stderr, "视频合成失败 (ffmpeg返回 %d)\n", ret);
+            fprintf(stderr, "视频合成失败 (ffmpeg返回 %d = %d>>8)\n", ret, ret>>8);
     }
 
     return 0;
@@ -1037,11 +1037,11 @@ static int mode_video(const char *input_video, const char *output_video,
     // Step 1: Extract frames from input video (with timeout)
     printf("步骤1: 提取视频帧...\n");
     snprintf(cmd, sizeof(cmd),
-        "timeout 60 ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
+        "timeout 300 ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
         input_video, frames_dir);
     int ret = system(cmd);
     if (ret != 0) {
-        fprintf(stderr, "视频帧提取可能未完成 (ffmpeg返回 %d)，尝试继续...\n", ret);
+        fprintf(stderr, "视频帧提取可能未完成 (ffmpeg返回 %d = %d>>8)，尝试继续...\n", ret, ret>>8);
     }
 
     // Count frames
@@ -1194,7 +1194,7 @@ static int mode_video(const char *input_video, const char *output_video,
     if (ret == 0) {
         printf("视频已保存: %s\n", output_video);
     } else {
-        fprintf(stderr, "视频合成失败 (ffmpeg返回 %d)\n", ret);
+        fprintf(stderr, "视频合成失败 (ffmpeg返回 %d = %d>>8)\n", ret, ret>>8);
     }
 
     // Cleanup temp files

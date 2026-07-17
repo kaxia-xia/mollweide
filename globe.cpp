@@ -850,13 +850,13 @@ static int mode_compare(const char *input_file, double lat0,
     Image frame;
     frame.create(FW, FH, 0, 0, 0);
 
+    // Stars background first, then render earth on top
+    generate_stars(frame, FW, FH, 42);
+
     double land_pct, water_pct;
     render_compare(frame, ECX, ECY, ER, lat0,
                     ell, ecx, ecy, rx, ry,
                     land_pct, water_pct);
-
-    // Add stars background
-    generate_stars(frame, FW, FH, 42);
 
     // Draw labels
     draw_text(frame, 10, 10, "0", 255, 255, 255);

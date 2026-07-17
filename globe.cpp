@@ -289,30 +289,28 @@ static void extract_ellipse(const Image &src,
                 sample_bilinear(src, cx + nx * rx, cy + ny * ry, r, g, b);
                 auto dp = ell.pix(ex, ey);
                 dp[0] = r; dp[1] = g; dp[2] = b;
+            }
+        }
 
     // Fill any remaining black edge pixels by copying from nearest colored pixel.
     // This ensures seamless horizontal wrapping at the 180deg meridian.
     for (int ey = 0; ey < eh; ++ey) {
-        // Find first non-black pixel from left
         int first = -1;
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
             if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { first = ex; break; }
         }
-        // Find last non-black pixel from right
         int last = -1;
         for (int ex = ew - 1; ex >= 0; --ex) {
             auto dp = ell.pix(ex, ey);
             if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { last = ex; break; }
         }
         if (first > 0 && last >= first) {
-            // Copy from first non-black to left edge
             auto sp = ell.pix(first, ey);
             for (int ex = 0; ex < first; ++ex) {
                 auto dp = ell.pix(ex, ey);
                 dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
             }
-            // Copy from last non-black to right edge
             sp = ell.pix(last, ey);
             for (int ex = last + 1; ex < ew; ++ex) {
                 auto dp = ell.pix(ex, ey);
@@ -320,9 +318,6 @@ static void extract_ellipse(const Image &src,
             }
         }
     }
-
-            }
-        }
 
     printf("  Ellipse image: %d x %d\n", ew, eh);
 }
@@ -333,6 +328,8 @@ static void extract_ellipse(const Image &src,
 static void generate_stars(Image &frame, int w, int h, unsigned int seed) {
     srand(seed);
     for (int i = 0; i < 500; ++i) {
+
+
         int x = rand() % w;
         int y = rand() % h;
         int bright = 40 + rand() % 180;
@@ -1153,6 +1150,8 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("清理临时文件...\n");
     snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
     system(cmd);
+    return ret == 0 ? 0 : 1;
+}
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);

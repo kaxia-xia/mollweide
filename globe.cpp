@@ -110,11 +110,11 @@ static bool is_map_pixel(const unsigned char *p) {
 static bool is_water_pixel(const unsigned char *p);
 
 // ---------------------------------------------------------------------------
-// Mollweide forward projection
+// Mollweide forward projection — optimized with fewer iterations
 // ---------------------------------------------------------------------------
 static void mollweide_forward(double lat, double lon, double &mx, double &my) {
     double theta = lat;
-    for (int i = 0; i < 30; ++i) {
+    for (int i = 0; i < 4; ++i) {
         double s2t = sin(2.0 * theta);
         double f = 2.0 * theta + s2t - PI * sin(lat);
         double df = 2.0 + 2.0 * cos(2.0 * theta);
@@ -183,22 +183,15 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
-
-    // Mollweide projection wraps horizontally at lon=+-180deg.
-    // When mx is near the edge, sample from the opposite side to avoid
-    // the black border or incorrectly filled edge pixels.
+    // Wrap mx: sample from the opposite side when near the edge.
+    // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
     double wmx = mx;
-    if (wmx > 0.98) {
-        wmx = wmx - 2.0;
-    } else if (wmx < -0.98) {
-        wmx = wmx + 2.0;
-    }
-
+    if (wmx > 1.0) wmx = wmx - 2.0;
+    else if (wmx < -1.0) wmx = wmx + 2.0;
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
-
-    // If still black, try the other side
+    // If the sampled pixel is black (edge of extracted texture), try the other side.
     if (r < 4 && g < 4 && b < 4) {
         double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
         double ex2 = ecx + wmx2 * rx;
@@ -206,6 +199,8 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     }
     return true;
 }
+
+    // If still black, try the other side
 
 // Find the map ellipse in the source image
 // ---------------------------------------------------------------------------
@@ -518,8 +513,11 @@ static void render_compare(Image &frame,
     int half_w = w / 2;
     long long total_pixels = 0;
     long long land_pixels = 0;
+    // Left half: lon0 = 0 — precompute rotation matrix
+    double Xx_l = -sin(0.0), Xy_l = 0, Xz_l = cos(0.0);
+    double Yx_l = -sin(lat0) * cos(0.0), Yy_l = cos(lat0), Yz_l = -sin(lat0) * sin(0.0);
+    double Zx_l = cos(lat0) * cos(0.0), Zy_l = sin(lat0), Zz_l = cos(lat0) * sin(0.0);
 
-    // Left half: lon0 = 0
     for (int py = 0; py < h; ++py) {
         for (int px = 0; px < half_w; ++px) {
             double nx = (px - earth_cx) / earth_r;
@@ -528,19 +526,9 @@ static void render_compare(Image &frame,
             if (nz2 < 0) continue;
             double nz = sqrt(nz2);
 
-            double Xx = -sin(0.0);
-            double Xy = 0;
-            double Xz = cos(0.0);
-            double Yx = -sin(lat0) * cos(0.0);
-            double Yy = cos(lat0);
-            double Yz = -sin(lat0) * sin(0.0);
-            double Zx = cos(lat0) * cos(0.0);
-            double Zy = sin(lat0);
-            double Zz = cos(lat0) * sin(0.0);
-
-            double px3 = nx * Xx + ny * Yx + nz * Zx;
-            double py3 = nx * Xy + ny * Yy + nz * Zy;
-            double pz3 = nx * Xz + ny * Yz + nz * Zz;
+            double px3 = nx * Xx_l + ny * Yx_l + nz * Zx_l;
+            double py3 = nx * Xy_l + ny * Yy_l + nz * Zy_l;
+            double pz3 = nx * Xz_l + ny * Yz_l + nz * Zz_l;
 
             double lat = asin(std::clamp(py3, -1.0, 1.0));
             double lon = atan2(pz3, px3);
@@ -558,10 +546,15 @@ static void render_compare(Image &frame,
                 frame.set_pixel(px, py, r, g, b);
             }
         }
-    }
 
+    }
     // Right half: lon0 = PI
     double right_earth_cx = earth_cx + half_w;
+    // Right half: lon0 = PI — precompute rotation matrix
+    double Xx_r = -sin(PI), Xy_r = 0, Xz_r = cos(PI);
+    double Yx_r = -sin(lat0) * cos(PI), Yy_r = cos(lat0), Yz_r = -sin(lat0) * sin(PI);
+    double Zx_r = cos(lat0) * cos(PI), Zy_r = sin(lat0), Zz_r = cos(lat0) * sin(PI);
+
     for (int py = 0; py < h; ++py) {
         for (int px = half_w; px < w; ++px) {
             double nx = (px - right_earth_cx) / earth_r;
@@ -570,19 +563,9 @@ static void render_compare(Image &frame,
             if (nz2 < 0) continue;
             double nz = sqrt(nz2);
 
-            double Xx = -sin(PI);
-            double Xy = 0;
-            double Xz = cos(PI);
-            double Yx = -sin(lat0) * cos(PI);
-            double Yy = cos(lat0);
-            double Yz = -sin(lat0) * sin(PI);
-            double Zx = cos(lat0) * cos(PI);
-            double Zy = sin(lat0);
-            double Zz = cos(lat0) * sin(PI);
-
-            double px3 = nx * Xx + ny * Yx + nz * Zx;
-            double py3 = nx * Xy + ny * Yy + nz * Zy;
-            double pz3 = nx * Xz + ny * Yz + nz * Zz;
+            double px3 = nx * Xx_r + ny * Yx_r + nz * Zx_r;
+            double py3 = nx * Xy_r + ny * Yy_r + nz * Zy_r;
+            double pz3 = nx * Xz_r + ny * Yz_r + nz * Zz_r;
 
             double lat = asin(std::clamp(py3, -1.0, 1.0));
             double lon = atan2(pz3, px3);
@@ -826,9 +809,7 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         char fn[256];
         snprintf(fn, sizeof(fn), "%s/frame_%04d.png", out_dir, f);
         frame.save_png(fn);
-
-        if (f % 30 == 0 || f == num_frames - 1)
-            printf("  帧 %4d/%d\n", f + 1, num_frames);
+        frame.save_png(fn);
     }
 
     printf("\n完成! 共 %d 帧 -> %s/\n", num_frames, out_dir);
@@ -1188,6 +1169,7 @@ int main(int argc, char **argv) {
     }
 
     // Normal mode
+    setvbuf(stdout, NULL, _IONBF, 0);
     const char *input_file = argv[1];
     int num_frames = 360;
     double lat0 = 0.0;

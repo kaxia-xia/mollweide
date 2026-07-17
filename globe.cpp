@@ -212,6 +212,7 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
 static bool find_ellipse(const Image &img, double &cx, double &cy,
                           double &rx, double &ry) {
     double sx = 0, sy = 0;
+    fprintf(stderr, "DEBUG: find_ellipse start, img=%dx%d\n", img.w, img.h);
     int cnt = 0;
     for (int y = 0; y < img.h; ++y)
         for (int x = 0; x < img.w; ++x)
@@ -595,11 +596,11 @@ static void render_compare(Image &frame,
             double px3 = nx * Xx + ny * Yx + nz * Zx;
             double py3 = nx * Xy + ny * Yy + nz * Zy;
             double pz3 = nx * Xz + ny * Yz + nz * Zz;
-
             double lat = asin(std::clamp(py3, -1.0, 1.0));
             double lon = atan2(pz3, px3);
 
             double mx, my;
+            mollweide_forward(lat, lon, mx, my);
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 unsigned char pix[3] = {r, g, b};
@@ -610,18 +611,8 @@ static void render_compare(Image &frame,
                 frame.set_pixel(px, py, r, g, b);
             }
 
-
-                frame.set_pixel(px, py, r, g, b);
-                total_pixels++;
-                if (!is_water_pixel(&r)) land_pixels++;
             }
         }
-    }
-
-    // Draw separator line
-    for (int py = 0; py < h; ++py) {
-        auto p = frame.pix(half_w, py);
-        p[0] = 255; p[1] = 255; p[2] = 255;
     }
 
     if (total_pixels > 0) {
@@ -930,6 +921,8 @@ static int mode_compare(const char *input_file, double lat0,
     printf("=== 生成双视角对比图 ===\n");
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
 
+    fprintf(stderr, "DEBUG: mode_compare started\n");
+    fprintf(stderr, "DEBUG: loading image\n");
     printf("输入: %s\n", input_file);
     printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);

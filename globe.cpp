@@ -158,51 +158,61 @@ static void apply_purple_glow(unsigned char &r, unsigned char &g, unsigned char 
     int maxc = std::max({r, g, b});
     if (maxc < 2) return;
 
-    // Determine if this is land or water based on original color characteristics
-    // Water: blue dominant, or near-white (sea foam), or light green (shallow), or dark red (deep)
-    bool water = false;
     int ri = r, gi = g, bi = b;
-    // Pure white or near white
-    if (ri > 240 && gi > 240 && bi > 240) water = true;
-    // Sea blue: blue dominant, low brightness
-    else if (bi > ri && bi > gi && bi > 30 && ri < 100 && gi < 100) water = true;
-    // Light green: green dominant
-    else if (gi > ri && gi > bi && gi > 80 && ri < 150 && bi < 150) water = true;
-    // Dark red: red dominant, low brightness
-    else if (ri > gi && ri > bi && ri > 30 && gi < 80 && bi < 80) water = true;
+    double bright = maxc / 255.0;
+
+    // Better water detection for satellite imagery:
+    // True ocean: blue is the dominant channel AND significantly higher than red
+    bool water = false;
+
+    // 1) Deep / open ocean: blue dominant, blue >> red, relatively dark
+    if (bi > ri && bi > gi && bi > 40 && ri < 120 && gi < 140) {
+        water = true;
+    }
+    // 2) Shallow / coastal water: greenish-blue, green and blue high, red low
+    else if (gi > ri && bi > ri && ri < 100 && gi > 60 && bi > 60) {
+        water = true;
+    }
+    // 3) Very dark pixels where blue is at least as high as red and green
+    //    (deep ocean in shaded areas)
+    else if (maxc < 60 && bi >= ri && bi >= gi) {
+        water = true;
+    }
+    // 4) White / near-white sea foam or clouds over water
+    //    But only if NOT on a land-colored background
+    else if (ri > 220 && gi > 220 && bi > 220) {
+        water = true;
+    }
 
     if (water) {
-        // Ocean: dark purple / indigo
-        // Map brightness to purple intensity
-        double bright = maxc / 255.0;
-        r = (unsigned char)std::clamp((int)(40 + bright * 60), 0, 255);
-        g = (unsigned char)std::clamp((int)(10 + bright * 30), 0, 255);
-        b = (unsigned char)std::clamp((int)(60 + bright * 80), 0, 255);
+        // Ocean: dark purple / indigo with some variation based on brightness
+        int pr = (int)(30 + bright * 50);
+        int pg = (int)(5 + bright * 25);
+        int pb = (int)(50 + bright * 70);
+        r = (unsigned char)std::clamp(pr, 0, 255);
+        g = (unsigned char)std::clamp(pg, 0, 255);
+        b = (unsigned char)std::clamp(pb, 0, 255);
     } else {
-        // Land: bright glowing purple / magenta
-        double bright = maxc / 255.0;
-        double glow = 0.7 + 0.5 * bright;
-        // Purple-magenta glow: high red and blue, low green
-        r = (unsigned char)std::clamp((int)(120 + bright * 100), 0, 255);
-        g = (unsigned char)std::clamp((int)(20 + bright * 40), 0, 255);
-        b = (unsigned char)std::clamp((int)(160 + bright * 95), 0, 255);
-        // Add extra glow for brighter areas
-        if (bright > 0.5) {
-            int extra = (int)((bright - 0.5) * 2.0 * 60);
+        // Land: bright glowing purple / magenta with intensity based on original brightness
+        int pr = (int)(130 + bright * 100);
+        int pg = (int)(15 + bright * 35);
+        int pb = (int)(170 + bright * 85);
+        r = (unsigned char)std::clamp(pr, 0, 255);
+        g = (unsigned char)std::clamp(pg, 0, 255);
+        b = (unsigned char)std::clamp(pb, 0, 255);
+        /* Extra glow for brighter areas (deserts, clouds over land) */
+        if (bright > 0.4) {
+            int extra = (int)((bright - 0.4) * 1.6 * 70);
             r = std::min(255, r + extra);
             b = std::min(255, b + extra);
         }
     }
 }
-
-
-// ---------------------------------------------------------------------------
-// Sample from ellipse texture
-// ---------------------------------------------------------------------------
 static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double rx, double ry,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
+
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
     // Wrap mx: sample from the opposite side when near the edge.
     // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
@@ -568,12 +578,6 @@ static void render_compare(Image &frame,
                 if (!is_water_pixel(&r)) land_pixels++;
                 if (purple_mode) apply_purple_glow(r, g, b);
                 frame.set_pixel(px, py, r, g, b);
-            }
-
-                if (purple_mode) apply_purple_glow(r, g, b);
-
-                frame.set_pixel(px, py, r, g, b);
-                total_pixels++;
                 if (!is_water_pixel(&r)) land_pixels++;
             }
         }
@@ -611,11 +615,10 @@ static void render_compare(Image &frame,
 
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
-                if (purple_mode) apply_purple_glow(r, g, b);
-
-                frame.set_pixel(px, py, r, g, b);
                 total_pixels++;
                 if (!is_water_pixel(&r)) land_pixels++;
+                if (purple_mode) apply_purple_glow(r, g, b);
+                frame.set_pixel(px, py, r, g, b);
             }
         }
     }
@@ -772,7 +775,7 @@ static void draw_text(Image &img, int x, int y, const char *text,
 // ---------------------------------------------------------------------------
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "用法: %s <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度]\n"
+        "用法: %s <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度] [--purple]\n"
         "\n"
         "位置参数:\n"
         "  输入图片         摩尔维特投影的世界地图图片\n"

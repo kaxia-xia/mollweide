@@ -477,31 +477,30 @@ static void render_single(Image &frame,
 }
 
 // ---------------------------------------------------------------------------
-// Check if a pixel is water (based on blue channel dominance)
-// ---------------------------------------------------------------------------
 static bool is_water_pixel(const unsigned char *p) {
     int r = p[0], g = p[1], b = p[2];
     int maxc = std::max({r, g, b});
     if (maxc < 3) return true;
 
-    // In satellite imagery, true ocean is characterized by BLUE being
-    // the dominant channel. Land (vegetation, desert, snow/clouds) has
-    // RED or GREEN as the dominant channel, or all channels high (white).
+    // True ocean: BLUE is the dominant channel, significantly higher than red.
+    // Land (vegetation, desert, snow, rocks) has RED or GREEN as dominant,
+    // or all channels roughly equal (grey/white).
 
-    // 1) Deep / open ocean: blue is clearly the max channel
-    if (b > r && b >= g && b > 35 && (b - r) > 15 && r < 120 && g < 140) return true;
+    // 1) Deep / open ocean: blue clearly dominates
+    if (b > r && b >= g && b > 40 && (b - r) > 18 && r < 110 && g < 130) return true;
 
-    // 2) Shallow / coastal water: blue >= green > red, red is low
-    if (b >= g && g > r && r < 80 && g > 35 && b > 35 && (b - r) > 20) return true;
+    // 2) Shallow / coastal: blue >= green, both > red, red is very low
+    if (b >= g && g > r && r < 70 && g > 30 && b > 30 && (b - r) > 25) return true;
 
-    // 3) Very dark pixels where blue is at least as high as red/green
-    if (maxc < 40 && b >= r && b >= g && r < 30 && g < 30) return true;
+    // 3) Very dark blue pixels (deep ocean shadow)
+    if (maxc < 35 && b >= r && b >= g && r < 25 && g < 25) return true;
 
-    // 4) Bright white/cyan pixels over water
-    if (r > 235 && g > 235 && b > 235 && b >= r && b >= g) return true;
+    // 4) Bright white/cyan — only if blue is clearly the max
+    if (r > 240 && g > 240 && b > 240 && b > r && b > g) return true;
 
     return false;
 }
+
 
 // ---------------------------------------------------------------------------
 static void render_compare(Image &frame,

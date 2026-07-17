@@ -183,15 +183,22 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
-    // Wrap mx: sample from the opposite side when near the edge.
-    // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
+
+    // Mollweide projection wraps horizontally at lon=+-180deg.
+    // When mx is near the edge, sample from the opposite side to avoid
+    // the black border or incorrectly filled edge pixels.
     double wmx = mx;
-    if (wmx > 1.0) wmx = wmx - 2.0;
-    else if (wmx < -1.0) wmx = wmx + 2.0;
+    if (wmx > 0.98) {
+        wmx = wmx - 2.0;
+    } else if (wmx < -0.98) {
+        wmx = wmx + 2.0;
+    }
+
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
-    // If the sampled pixel is black (edge of extracted texture), try the other side.
+
+    // If still black, try the other side
     if (r < 4 && g < 4 && b < 4) {
         double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
         double ex2 = ecx + wmx2 * rx;
@@ -200,8 +207,6 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     return true;
 }
 
-    // If still black (edge case), try the other side
-// ---------------------------------------------------------------------------
 // Find the map ellipse in the source image
 // ---------------------------------------------------------------------------
 static bool find_ellipse(const Image &img, double &cx, double &cy,
@@ -476,26 +481,25 @@ static void render_single(Image &frame,
     }
 }
 
-// ---------------------------------------------------------------------------
 static bool is_water_pixel(const unsigned char *p) {
     int r = p[0], g = p[1], b = p[2];
     int maxc = std::max({r, g, b});
     if (maxc < 3) return true;
 
-    // True ocean: BLUE is the dominant channel, significantly higher than red.
-    // Land (vegetation, desert, snow, rocks) has RED or GREEN as dominant,
-    // or all channels roughly equal (grey/white).
+    // Key insight: in true ocean, BLUE is significantly higher than BOTH
+    // red and green. Land pixels may have blue as the max channel too,
+    // but the difference is smaller, especially between blue and green.
 
-    // 1) Deep / open ocean: blue clearly dominates
-    if (b > r && b >= g && b > 40 && (b - r) > 18 && r < 110 && g < 130) return true;
+    // 1) Deep ocean: blue >> red, blue > green, significant margins
+    if (b > r && b > g && b > 40 && (b - r) > 20 && (b - g) > 8 && r < 110 && g < 130) return true;
 
-    // 2) Shallow / coastal: blue >= green, both > red, red is very low
-    if (b >= g && g > r && r < 70 && g > 30 && b > 30 && (b - r) > 25) return true;
+    // 2) Shallow/coastal: blue >= green > red, red very low
+    if (b >= g && g > r && r < 65 && g > 25 && b > 25 && (b - r) > 28 && (b - g) > 5) return true;
 
-    // 3) Very dark blue pixels (deep ocean shadow)
-    if (maxc < 35 && b >= r && b >= g && r < 25 && g < 25) return true;
+    // 3) Very dark: all channels very low, blue slightly dominant
+    if (maxc < 30 && b >= r && b >= g && r < 20 && g < 20) return true;
 
-    // 4) Bright white/cyan — only if blue is clearly the max
+    // 4) Bright white/cyan over water: blue clearly dominates
     if (r > 240 && g > 240 && b > 240 && b > r && b > g) return true;
 
     return false;

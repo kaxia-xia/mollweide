@@ -939,19 +939,24 @@ static int mode_compare(const char *input_file, double lat0,
     // Left side: green large digits for land percentage (2x size)
     char land_text[16];
     snprintf(land_text, sizeof(land_text), "%.1f%%", land_pct);
-    int land_x = (FW/4 - (int)strlen(land_text) * 18) / 2;
+    int land_x = (FW/4 - (int)strlen(land_text) * 27) / 2;
     for (int ci = 0; land_text[ci]; ++ci) {
-        int cx = land_x + ci * 18;
+        int cx = land_x + ci * 27;
         unsigned char ch = (unsigned char)land_text[ci];
         if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
             unsigned char bits = font8x8[ch - 32][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
-                    frame.set_pixel(cx + col*2, 50 + row*2, 0, 255, 0);
-                    frame.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 255, 0);
-                    frame.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 255, 0);
-                    frame.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 255, 0);
+                    frame.set_pixel(cx + col*3, 50 + row*3, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 255, 0);
+                    frame.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 255, 0);
+                    frame.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 255, 0);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 255, 0);
                 }
             }
         }
@@ -960,19 +965,24 @@ static int mode_compare(const char *input_file, double lat0,
     // Right side: blue large digits for water percentage (2x size)
     char water_text[16];
     snprintf(water_text, sizeof(water_text), "%.1f%%", water_pct);
-    int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 18) / 2;
+    int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 27) / 2;
     for (int ci = 0; water_text[ci]; ++ci) {
-        int cx = water_x + ci * 18;
+        int cx = water_x + ci * 27;
         unsigned char ch = (unsigned char)water_text[ci];
         if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
             unsigned char bits = font8x8[ch - 32][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
-                    frame.set_pixel(cx + col*2, 50 + row*2, 0, 100, 255);
-                    frame.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 100, 255);
-                    frame.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 100, 255);
-                    frame.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 100, 255);
+                    frame.set_pixel(cx + col*3, 50 + row*3, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 100, 255);
+                    frame.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 100, 255);
+                    frame.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 100, 255);
+                    frame.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 100, 255);
                 }
             }
         }
@@ -1117,19 +1127,24 @@ static int mode_video(const char *input_video, const char *output_video,
         // Left side: green large digits for land percentage
         char land_text[16];
         snprintf(land_text, sizeof(land_text), "%.1f%%", land_pct);
-        int land_x = (FW/4 - (int)strlen(land_text) * 18) / 2;
+        int land_x = (FW/4 - (int)strlen(land_text) * 27) / 2;
         for (int ci = 0; land_text[ci]; ++ci) {
-            int cx = land_x + ci * 18;
+            int cx = land_x + ci * 27;
             unsigned char ch = (unsigned char)land_text[ci];
             if (ch < 32) ch = 32;
             for (int row = 0; row < 8; ++row) {
                 unsigned char bits = font8x8[ch - 32][row];
                 for (int col = 0; col < 8; ++col) {
                     if (bits & (0x80 >> col)) {
-                        frame_out.set_pixel(cx + col*2, 50 + row*2, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 255, 0);
-                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 255, 0);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 255, 0);
                     }
                 }
             }
@@ -1138,19 +1153,24 @@ static int mode_video(const char *input_video, const char *output_video,
         // Right side: blue large digits for water percentage
         char water_text[16];
         snprintf(water_text, sizeof(water_text), "%.1f%%", water_pct);
-        int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 18) / 2;
+        int water_x = FW/2 + (FW/4 - (int)strlen(water_text) * 27) / 2;
         for (int ci = 0; water_text[ci]; ++ci) {
-            int cx = water_x + ci * 18;
+            int cx = water_x + ci * 27;
             unsigned char ch = (unsigned char)water_text[ci];
             if (ch < 32) ch = 32;
             for (int row = 0; row < 8; ++row) {
                 unsigned char bits = font8x8[ch - 32][row];
                 for (int col = 0; col < 8; ++col) {
                     if (bits & (0x80 >> col)) {
-                        frame_out.set_pixel(cx + col*2, 50 + row*2, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*2, 50 + row*2 + 1, 0, 100, 255);
-                        frame_out.set_pixel(cx + col*2 + 1, 50 + row*2 + 1, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 1, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 1, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 1, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3, 50 + row*3 + 2, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 1, 50 + row*3 + 2, 0, 100, 255);
+                        frame_out.set_pixel(cx + col*3 + 2, 50 + row*3 + 2, 0, 100, 255);
                     }
                 }
             }

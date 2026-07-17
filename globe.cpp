@@ -1029,21 +1029,19 @@ static int mode_video(const char *input_video, const char *output_video,
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
     system(cmd);
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", frames_dir);
+    fprintf(stderr, "DEBUG: mode_video started\n");
+    fprintf(stderr, "DEBUG: step 1\n");
     system(cmd);
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", compare_dir);
     system(cmd);
-
-    // Step 1: Extract frames from input video
+    // Step 1: Extract frames from input video (with timeout)
     printf("步骤1: 提取视频帧...\n");
     snprintf(cmd, sizeof(cmd),
-        "ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
+        "timeout 60 ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
         input_video, frames_dir);
     int ret = system(cmd);
     if (ret != 0) {
-        fprintf(stderr, "视频帧提取失败 (ffmpeg返回 %d)\n", ret);
-        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
-        system(cmd);
-        return 1;
+        fprintf(stderr, "视频帧提取可能未完成 (ffmpeg返回 %d)，尝试继续...\n", ret);
     }
 
     // Count frames
@@ -1099,7 +1097,6 @@ static int mode_video(const char *input_video, const char *output_video,
         char inp[256], outp[256];
         snprintf(inp, sizeof(inp), "%s/frame_%04d.png", frames_dir, f);
         snprintf(outp, sizeof(outp), "%s/frame_%04d.png", compare_dir, f);
-
         Image frame_src;
         if (!frame_src.load(inp)) {
             fprintf(stderr, "  跳过帧 %d: 无法加载\n", f);
@@ -1109,8 +1106,11 @@ static int mode_video(const char *input_video, const char *output_video,
         // Extract texture from this frame using same ellipse bounds
         Image frame_ell;
         double fecx, fecy;
+        extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, fecx, fecy);
+
         Image frame_out;
         frame_out.create(FW, FH, 0, 0, 0);
+
 
         // Stars background
         generate_stars(frame_out, FW, FH, 42 + f);
@@ -1178,8 +1178,6 @@ static int mode_video(const char *input_video, const char *output_video,
 
         frame_out.save_png(outp);
 
-
-        frame_out.save_png(outp);
 
         if (f % 30 == 0 || f == num_frames)
             printf("  帧 %4d/%d\n", f, num_frames);

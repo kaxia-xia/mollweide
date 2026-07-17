@@ -811,7 +811,6 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         frame.save_png(fn);
         frame.save_png(fn);
     }
-
     printf("\n完成! 共 %d 帧 -> %s/\n", num_frames, out_dir);
 
     if (!frames_only && output_video) {

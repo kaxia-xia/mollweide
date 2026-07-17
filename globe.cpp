@@ -1085,7 +1085,7 @@ int main(int argc, char **argv) {
             if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
                 output_video = argv[++i];
             else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
-                lat0 = atof(argv[++i]) * PI / 180.0;
+                lat0 = -atof(argv[++i]) * PI / 180.0;
             else if (i == argc - 1 && argv[i][0] != '-')
                 out_dir = argv[i];
         }
@@ -1112,7 +1112,7 @@ int main(int argc, char **argv) {
         pos++;
     }
     if (pos < argc && argv[pos][0] != '-') {
-        lat0 = atof(argv[pos]) * PI / 180.0;
+        lat0 = -atof(argv[pos]) * PI / 180.0;
         pos++;
     }
     if (pos < argc && argv[pos][0] != '-') {
@@ -1129,10 +1129,10 @@ int main(int argc, char **argv) {
             single_mode = true;
             single_lon = atof(argv[++i]) * PI / 180.0;
         } else if (strcmp(argv[i], "--lat") == 0 && i + 1 < argc)
-            single_lat = atof(argv[++i]) * PI / 180.0;
+            single_lat = -atof(argv[++i]) * PI / 180.0;
         else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             compare_mode = true;
-            compare_lat = atof(argv[++i]) * PI / 180.0;
+            compare_lat = -atof(argv[++i]) * PI / 180.0;
         }
     }
 

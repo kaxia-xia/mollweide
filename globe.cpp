@@ -450,29 +450,36 @@ static void render_single(Image &frame,
 // Check if a pixel is water (based on blue channel dominance)
 // ---------------------------------------------------------------------------
 static bool is_water_pixel(const unsigned char *p) {
-    // Ocean colors: pure white, sea blue (dark blue), light green, dark red
-    // Everything else is land
     int r = p[0], g = p[1], b = p[2];
-    // Pure white: (255,255,255) or near white
-    if (r > 240 && g > 240 && b > 240) return true;
-    // Sea blue (dark blue): blue dominant, low brightness
-    if (b > r && b > g && b > 30 && r < 100 && g < 100) return true;
-    // Light green: green dominant, moderate brightness
-    if (g > r && g > b && g > 80 && r < 150 && b < 150) return true;
-    // Dark red: red dominant, low brightness
-    if (r > g && r > b && r > 30 && g < 80 && b < 80) return true;
+    int maxc = std::max({r, g, b});
+    if (maxc < 3) return true;
+
+    // In satellite imagery, true ocean is characterized by BLUE being
+    // the dominant channel. Land (vegetation, desert, snow/clouds) has
+    // RED or GREEN as the dominant channel, or all channels high (white).
+
+    // 1) Deep / open ocean: blue is clearly the max channel
+    if (b > r && b >= g && b > 35 && (b - r) > 15 && r < 120 && g < 140) return true;
+
+    // 2) Shallow / coastal water: blue >= green > red, red is low
+    if (b >= g && g > r && r < 80 && g > 35 && b > 35 && (b - r) > 20) return true;
+
+    // 3) Very dark pixels where blue is at least as high as red/green
+    if (maxc < 40 && b >= r && b >= g && r < 30 && g < 30) return true;
+
+    // 4) Bright white/cyan pixels over water
+    if (r > 235 && g > 235 && b > 235 && b >= r && b >= g) return true;
+
     return false;
 }
 
-// ---------------------------------------------------------------------------
-// Render compare image: left=0° meridian, right=180° meridian
-// Returns (land_percent, water_percent) for the visible area
 // ---------------------------------------------------------------------------
 static void render_compare(Image &frame,
                             double earth_cx, double earth_cy, double earth_r,
                             double lat0,
                             const Image &ell, double ecx, double ecy,
                             double rx, double ry,
+
                             double &land_pct, double &water_pct) {
     int w = frame.w, h = frame.h;
     int half_w = w / 2;

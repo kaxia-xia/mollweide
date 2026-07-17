@@ -775,6 +775,16 @@ static int mode_compare(const char *input_file, double lat0,
 // ---------------------------------------------------------------------------
 // Mode 4: Process video
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Mode 4: Process video — optimized version
+// Only detects ellipse on first frame, reuses for all subsequent frames.
+// Cleans up temp files on exit.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Mode 4: Process video — optimized version
+// Only detects ellipse on first frame, reuses bounds for all subsequent frames.
+// Cleans up temp files on exit.
+// ---------------------------------------------------------------------------
 static int mode_video(const char *input_video, const char *output_video,
                        double lat0, const char *out_dir) {
     printf("=== 处理视频 ===\n");
@@ -784,14 +794,19 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("帧目录: %s\n\n", out_dir);
 
     char cmd[1024];
+    char frames_dir[256], compare_dir[256];
+    snprintf(frames_dir, sizeof(frames_dir), "%s/input_frames", out_dir);
+    snprintf(compare_dir, sizeof(compare_dir), "%s/compare_frames", out_dir);
+
+    // Ensure output dirs exist
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
     system(cmd);
-
-    char frames_dir[256];
-    snprintf(frames_dir, sizeof(frames_dir), "%s/input_frames", out_dir);
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", frames_dir);
     system(cmd);
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", compare_dir);
+    system(cmd);
 
+    // Step 1: Extract frames from input video
     printf("步骤1: 提取视频帧...\n");
     snprintf(cmd, sizeof(cmd),
         "ffmpeg -y -i \"%s\" -q:v 2 %s/frame_%%04d.png 2>/dev/null",
@@ -799,12 +814,14 @@ static int mode_video(const char *input_video, const char *output_video,
     int ret = system(cmd);
     if (ret != 0) {
         fprintf(stderr, "视频帧提取失败 (ffmpeg返回 %d)\n", ret);
+        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
+        system(cmd);
         return 1;
     }
 
-    char count_cmd[256];
-    snprintf(count_cmd, sizeof(count_cmd), "ls %s/*.png 2>/dev/null | wc -l", frames_dir);
-    FILE *fp = popen(count_cmd, "r");
+    // Count frames
+    snprintf(cmd, sizeof(cmd), "ls %s/*.png 2>/dev/null | wc -l", frames_dir);
+    FILE *fp = popen(cmd, "r");
     int num_frames = 0;
     if (fp) {
         char buf[32];
@@ -814,56 +831,75 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("  共 %d 帧\n", num_frames);
     if (num_frames == 0) {
         fprintf(stderr, "没有找到帧图片!\n");
+        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
+        system(cmd);
         return 1;
     }
 
-    printf("步骤2: 逐帧生成对比图...\n");
-    char compare_dir[256];
-    snprintf(compare_dir, sizeof(compare_dir), "%s/compare_frames", out_dir);
-    snprintf(cmd, sizeof(cmd), "mkdir -p %s", compare_dir);
-    system(cmd);
+    // Step 2: Detect ellipse on first frame
+    printf("步骤2: 检测第一帧椭圆...\n");
+    char first_frame[256];
+    snprintf(first_frame, sizeof(first_frame), "%s/frame_0001.png", frames_dir);
 
+    Image src;
+    if (!src.load(first_frame)) {
+        fprintf(stderr, "无法加载第一帧!\n");
+        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
+        system(cmd);
+        return 1;
+    }
+
+    double cx, cy, rx, ry;
+    if (!find_ellipse(src, cx, cy, rx, ry)) {
+        fprintf(stderr, "第一帧无法找到椭圆!\n");
+        snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
+        system(cmd);
+        return 1;
+    }
+
+    Image ell;
+    double ecx, ecy;
+    extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+    const int FW = 1920, FH = 1080;
+    const double ER = 420.0;
+    const double ECX = FW / 4.0;
+    const double ECY = FH / 2.0;
+
+    // Step 3: Process all frames
+    printf("步骤3: 逐帧生成对比图 (复用椭圆边界)...\n");
     for (int f = 1; f <= num_frames; ++f) {
         char inp[256], outp[256];
         snprintf(inp, sizeof(inp), "%s/frame_%04d.png", frames_dir, f);
         snprintf(outp, sizeof(outp), "%s/frame_%04d.png", compare_dir, f);
 
-        Image src;
-        if (!src.load(inp)) {
+        Image frame_src;
+        if (!frame_src.load(inp)) {
             fprintf(stderr, "  跳过帧 %d: 无法加载\n", f);
             continue;
         }
 
-        double cx, cy, rx, ry;
-        if (!find_ellipse(src, cx, cy, rx, ry)) {
-            fprintf(stderr, "  跳过帧 %d: 无法找到椭圆\n", f);
-            continue;
-        }
+        // Extract texture from this frame using same ellipse bounds
+        Image frame_ell;
+        double fecx, fecy;
+        extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, fecx, fecy);
 
-        Image ell;
-        double ecx, ecy;
-        extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
-
-        const int FW = 1920, FH = 1080;
-        const double ER = 420.0;
-        const double ECX = FW / 4.0;
-        const double ECY = FH / 2.0;
-
-        Image frame;
-        frame.create(FW, FH, 0, 0, 0);
+        Image frame_out;
+        frame_out.create(FW, FH, 0, 0, 0);
 
         double land_pct, water_pct;
-        render_compare(frame, ECX, ECY, ER, lat0,
-                        ell, ecx, ecy, rx, ry,
+        render_compare(frame_out, ECX, ECY, ER, lat0,
+                        frame_ell, fecx, fecy, rx, ry,
                         land_pct, water_pct);
 
-        frame.save_png(outp);
+        frame_out.save_png(outp);
 
         if (f % 30 == 0 || f == num_frames)
             printf("  帧 %4d/%d\n", f, num_frames);
     }
 
-    printf("步骤3: 合成新视频...\n");
+    // Step 4: Re-encode video
+    printf("步骤4: 合成新视频...\n");
     snprintf(cmd, sizeof(cmd),
         "ffmpeg -y -framerate 30 -i %s/frame_%%04d.png "
         "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
@@ -874,19 +910,16 @@ static int mode_video(const char *input_video, const char *output_video,
         printf("视频已保存: %s\n", output_video);
     } else {
         fprintf(stderr, "视频合成失败 (ffmpeg返回 %d)\n", ret);
-        return 1;
     }
 
+    // Cleanup temp files
     printf("清理临时文件...\n");
-    snprintf(cmd, sizeof(cmd), "rm -rf %s", frames_dir);
+    snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
     system(cmd);
 
     printf("\n完成!\n");
-    return 0;
+    return ret == 0 ? 0 : 1;
 }
-
-// ---------------------------------------------------------------------------
-// Main
 // ---------------------------------------------------------------------------
 int main(int argc, char **argv) {
     if (argc < 2) {

@@ -531,7 +531,8 @@ static void render_compare(Image &frame,
 // Draw text on image (simple pixel-based rendering)
 // ---------------------------------------------------------------------------
 // 8x8 bitmap font (ASCII 32-127)
-static const unsigned char font8x8[128][8] = {
+// 8x8 bitmap font for ASCII 32-127 (index 0 = space)
+static const unsigned char font8x8[96][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // 32 space
     {0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00}, // 33 !
     {0x6c,0x6c,0x6c,0x00,0x00,0x00,0x00,0x00}, // 34 "
@@ -633,7 +634,7 @@ static const unsigned char font8x8[128][8] = {
 static void draw_char(Image &img, int x, int y, char c,
                        unsigned char r, unsigned char g, unsigned char b) {
     if (c < 32 || c > 127) c = 32;
-    const unsigned char *glyph = font8x8[(unsigned char)c];
+    const unsigned char *glyph = font8x8[(unsigned char)c - 32];
     for (int row = 0; row < 8; ++row) {
         unsigned char bits = glyph[row];
         for (int col = 0; col < 8; ++col) {
@@ -871,7 +872,7 @@ static int mode_compare(const char *input_file, double lat0,
         unsigned char ch = (unsigned char)land_text[ci];
         if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
-            unsigned char bits = font8x8[ch][row];
+            unsigned char bits = font8x8[ch - 32][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
                     frame.set_pixel(cx + col*2, 50 + row*2, 0, 255, 0);
@@ -892,7 +893,7 @@ static int mode_compare(const char *input_file, double lat0,
         unsigned char ch = (unsigned char)water_text[ci];
         if (ch < 32) ch = 32;
         for (int row = 0; row < 8; ++row) {
-            unsigned char bits = font8x8[ch][row];
+            unsigned char bits = font8x8[ch - 32][row];
             for (int col = 0; col < 8; ++col) {
                 if (bits & (0x80 >> col)) {
                     frame.set_pixel(cx + col*2, 50 + row*2, 0, 100, 255);

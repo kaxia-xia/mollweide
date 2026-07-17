@@ -691,7 +691,7 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
     printf("=== 生成旋转地球视频帧 ===\n");
     printf("输入: %s\n", input_file);
     printf("帧数: %d\n", num_frames);
-    printf("纬度: %.1f\n", lat0);
+    printf("纬度: %.1f\n", -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
 
     char cmd[256];
@@ -767,7 +767,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
                         const char *out_dir) {
     printf("=== 生成单张地球图片 ===\n");
     printf("输入: %s\n", input_file);
-    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, lat0 * 180 / PI);
+    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
 
     char cmd[256];
@@ -804,7 +804,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
 
     char fn[256];
     int lon_deg = (int)round(lon0 * 180 / PI);
-    int lat_deg = (int)round(lat0 * 180 / PI);
+    int lat_deg = (int)round(-lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/lon_%+03d_lat_%+03d.png", out_dir, lon_deg, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -819,7 +819,7 @@ static int mode_compare(const char *input_file, double lat0,
                          const char *out_dir) {
     printf("=== 生成双视角对比图 ===\n");
     printf("输入: %s\n", input_file);
-    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
 
     char cmd[256];
@@ -906,7 +906,7 @@ static int mode_compare(const char *input_file, double lat0,
     }
 
     char fn[256];
-    int lat_deg = (int)round(lat0 * 180 / PI);
+    int lat_deg = (int)round(-lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/compare_%+03d.png", out_dir, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -933,7 +933,7 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("=== 处理视频 ===\n");
     printf("输入视频: %s\n", input_video);
     printf("输出视频: %s\n", output_video);
-    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     printf("帧目录: %s\n\n", out_dir);
 
     char cmd[1024];

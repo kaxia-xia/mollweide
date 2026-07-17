@@ -1,0 +1,46 @@
+# Ignore everything under build/
+build/
+
+# Ignore all image files everywhere except in test/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.webp
+*.ico
+*.tiff
+*.tif
+
+# Ignore all video files everywhere except in test/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+*.wmv
+*.mpg
+*.mpeg
+
+# Re-include images and videos inside test/
+!test/*.png
+!test/*.jpg
+!test/*.jpeg
+!test/*.gif
+!test/*.bmp
+!test/*.svg
+!test/*.webp
+!test/*.ico
+!test/*.tiff
+!test/*.tif
+!test/*.mp4
+!test/*.avi
+!test/*.mov
+!test/*.mkv
+!test/*.webm
+!test/*.flv
+!test/*.wmv
+!test/*.mpg
+!test/*.mpeg

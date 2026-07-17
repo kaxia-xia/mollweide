@@ -183,22 +183,15 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
-
-    // Mollweide projection wraps horizontally at lon=+-180deg.
-    // When mx is near the edge of [-1,1], sample from the opposite side
-    // to avoid the black border of the extracted texture.
+    // Wrap mx: sample from the opposite side when near the edge.
+    // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
     double wmx = mx;
-    if (wmx > 0.95) {
-        wmx = wmx - 2.0;
-    } else if (wmx < -0.95) {
-        wmx = wmx + 2.0;
-    }
-
+    if (wmx > 1.0) wmx = wmx - 2.0;
+    else if (wmx < -1.0) wmx = wmx + 2.0;
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
-
-    // If still black (edge case), try the other side
+    // If the sampled pixel is black (edge of extracted texture), try the other side.
     if (r < 4 && g < 4 && b < 4) {
         double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
         double ex2 = ecx + wmx2 * rx;
@@ -207,7 +200,7 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     return true;
 }
 
-
+    // If still black (edge case), try the other side
 // ---------------------------------------------------------------------------
 // Find the map ellipse in the source image
 // ---------------------------------------------------------------------------
@@ -296,6 +289,38 @@ static void extract_ellipse(const Image &src,
                 sample_bilinear(src, cx + nx * rx, cy + ny * ry, r, g, b);
                 auto dp = ell.pix(ex, ey);
                 dp[0] = r; dp[1] = g; dp[2] = b;
+
+    // Fill any remaining black edge pixels by copying from nearest colored pixel.
+    // This ensures seamless horizontal wrapping at the 180deg meridian.
+    for (int ey = 0; ey < eh; ++ey) {
+        // Find first non-black pixel from left
+        int first = -1;
+        for (int ex = 0; ex < ew; ++ex) {
+            auto dp = ell.pix(ex, ey);
+            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { first = ex; break; }
+        }
+        // Find last non-black pixel from right
+        int last = -1;
+        for (int ex = ew - 1; ex >= 0; --ex) {
+            auto dp = ell.pix(ex, ey);
+            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { last = ex; break; }
+        }
+        if (first > 0 && last >= first) {
+            // Copy from first non-black to left edge
+            auto sp = ell.pix(first, ey);
+            for (int ex = 0; ex < first; ++ex) {
+                auto dp = ell.pix(ex, ey);
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            }
+            // Copy from last non-black to right edge
+            sp = ell.pix(last, ey);
+            for (int ex = last + 1; ex < ew; ++ex) {
+                auto dp = ell.pix(ex, ey);
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            }
+        }
+    }
+
             }
         }
 
@@ -366,7 +391,6 @@ static void render_frame(Image &frame,
 
             double mx, my;
             mollweide_forward(lat, lon, mx, my);
-
             unsigned char r, g, b;
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 double rim = 1.0 - nz;
@@ -374,14 +398,15 @@ static void render_frame(Image &frame,
                 r = (unsigned char)std::clamp((int)(r * glow), 0, 255);
                 g = (unsigned char)std::clamp((int)(g * glow), 0, 255);
                 b = (unsigned char)std::clamp((int)(b * glow), 0, 255);
-                frame.set_pixel(px, py, r, g, b);
                 if (purple_mode) {
                     unsigned char pix[3] = {r, g, b};
                     apply_purple_glow(r, g, b, is_water_pixel(pix));
                 }
+                frame.set_pixel(px, py, r, g, b);
             }
         }
     }
+
 
     // Atmosphere glow
     for (int py = 0; py < h; ++py) {
@@ -438,17 +463,17 @@ static void render_single(Image &frame,
 
             double lat = asin(std::clamp(py3, -1.0, 1.0));
             double lon = atan2(pz3, px3);
-
             double mx, my;
             mollweide_forward(lat, lon, mx, my);
 
             unsigned char r, g, b;
+            if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 if (purple_mode) {
                     unsigned char pix[3] = {r, g, b};
                     apply_purple_glow(r, g, b, is_water_pixel(pix));
                 }
-            if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 frame.set_pixel(px, py, r, g, b);
+
             }
         }
     }
@@ -1128,11 +1153,6 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("清理临时文件...\n");
     snprintf(cmd, sizeof(cmd), "rm -rf %s %s", frames_dir, compare_dir);
     system(cmd);
-
-    printf("\n完成!\n");
-    return ret == 0 ? 0 : 1;
-}
-// ---------------------------------------------------------------------------
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);

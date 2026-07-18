@@ -222,20 +222,6 @@ def render_frame(tex, ew, eh, ecx, ecy, rx, ry, lon0, lat0):
                             r = min(255, int(25 + bright * 55))
                             g = min(255, int(5 + bright * 20))
                             b = min(255, int(45 + bright * 75))
-    # Parse PPM
-    # Find the three header lines
-    idx = ppm_data.find(b'\n')
-    magic = ppm_data[:idx].decode()
-    if magic != 'P6':
-        print(f"不是PPM格式: {magic}")
-        sys.exit(1)
-    rest = ppm_data[idx+1:]
-    idx = rest.find(b'\n')
-    w, h = map(int, rest[:idx].split())
-    rest = rest[idx+1:]
-    idx = rest.find(b'\n')
-    maxval = int(rest[:idx])
-    pixel_data = rest[idx+1:]
     
     return frame
 
@@ -259,7 +245,13 @@ def add_stars(frame, seed):
                     b2 = min(255, frame[idx][2] + b)
                     frame[idx] = (r, g, b2)
 
-def draw_text_pil(frame_pil, draw, x, y, text, r, g, b):
+def draw_text_pil(img, draw, x, y, text, r, g, b):
+    from PIL import ImageFont
+    try:
+        font = ImageFont.truetype("/system/fonts/DroidSansMono.ttf", 24)
+    except:
+        font = ImageFont.load_default()
+    draw.text((x, y), text, fill=(r, g, b), font=font)
     try:
         font = ImageFont.truetype("/system/fonts/DroidSansMono.ttf", 24)
     except:
@@ -351,8 +343,26 @@ def main():
         shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         preexec_fn=lambda: os.setsid() if hasattr(os, 'setsid') else None
     )
-    
+    proc = subprocess.Popen(
+        f'ffmpeg -c:v h264 -y -i "{input_video}" -vframes 1 -f image2pipe -vcodec ppm - 2>/dev/null',
     ppm_data = proc.stdout.read()
+    proc.wait(timeout=30)
+
+    # Parse PPM
+    idx = ppm_data.find(b'\n')
+    magic = ppm_data[:idx].decode()
+    if magic != 'P6':
+        print(f"不是PPM格式: {magic}")
+        sys.exit(1)
+    rest = ppm_data[idx+1:]
+    idx = rest.find(b'\n')
+    w, h = map(int, rest[:idx].split())
+    rest = rest[idx+1:]
+    idx = rest.find(b'\n')
+    maxval = int(rest[:idx])
+    pixel_data = rest[idx+1:]
+
+    first_frame = Image.frombytes('RGB', (w, h), pixel_data)
     proc.wait(timeout=30)
     
     
@@ -367,7 +377,8 @@ def main():
     print(f"  椭圆: center=({cx:.1f},{cy:.1f}), rx={rx:.1f}, ry={ry:.1f}")
     
     tex, ecx, ecy, ew, eh = extract_ellipse(first_frame, cx, cy, rx, ry)
-    print(f"  纹理: {ew}x{eh}")
+    dec_proc = subprocess.Popen(
+        f'ffmpeg -c:v h264 -y -i "{input_video}" -f rawvideo -pix_fmt rgb24 - 2>/dev/null',
     
     # Step 3: Stream process
     print(f"\n步骤3: 流式处理 {num_frames} 帧...")

@@ -198,13 +198,10 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
 
-    // Clamp mx slightly to avoid sampling at the very edge of the texture
-    // where bilinear interpolation may pick up dark boundary pixels.
-    // The Mollweide projection's 180° meridian (mx=±1) maps to the left/right
-    // edges of the ellipse texture. Sampling at exactly mx=±1 can produce
-    // seam artifacts, so we inset slightly.
-    const double mx_inset = 0.99;
-    double wmx = std::clamp(mx, -mx_inset, mx_inset);
+    // Normalize mx to [-1, 1] range with wrapping
+    double wmx = mx;
+    while (wmx > 1.0) wmx -= 2.0;
+    while (wmx < -1.0) wmx += 2.0;
 
     // Compute wrapped mx (shift by ±2 to get the other side of the texture)
     double wmx2 = (wmx >= 0.0) ? wmx - 2.0 : wmx + 2.0;
@@ -239,7 +236,7 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
         }
     }
 
-    // If neither is valid, try sampling even further inside
+    // If neither is valid, try sampling slightly inside the texture
     if (!primary_valid && !wrapped_valid) {
         double inset = 0.99;
         double wmx_inset = wmx * inset;
@@ -331,8 +328,8 @@ static bool find_ellipse(const Image &img, double &cx, double &cy,
 static void extract_ellipse(const Image &src,
                              double cx, double cy, double rx, double ry,
                              Image &ell, double &ecx, double &ecy) {
-    int ew = (int)ceil(2 * rx) + 9;  // Extra padding for seamless wrapping
-    int eh = (int)ceil(2 * ry) + 9;
+    int ew = (int)ceil(2 * rx) + 3;
+    int eh = (int)ceil(2 * ry) + 3;
     if (ew % 2 == 0) ew++;
     if (eh % 2 == 0) eh++;
     ell.create(ew, eh, 0, 0, 0);
@@ -353,60 +350,43 @@ static void extract_ellipse(const Image &src,
         }
 
     // Second pass: fill pixels outside the ellipse (but within the texture bounds)
-    // by wrapping horizontally. In Mollweide projection, mx=-1 and mx=+1 represent
-    // the same meridian (180°). So we fill the left padding from the right side
-    // and vice versa, ensuring seamless wrapping at the ±180° meridian.
+    // by copying from the nearest colored pixel. This ensures seamless horizontal
+    // wrapping at the 180deg meridian.
     for (int ey = 0; ey < eh; ++ey) {
-        // Find the first and last non-dark pixel in this row (inside the ellipse)
         int first = -1, last = -1;
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
-            int maxc = std::max({dp[0], dp[1], dp[2]});
-            if (maxc > 25) {
+            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) {
                 if (first < 0) first = ex;
                 last = ex;
             }
         }
-        if (first < 0) continue; // entire row is dark
-
-        // Fill dark pixels on the left side by wrapping from the right side
-        for (int ex = 0; ex < first; ++ex) {
-            double nx = (ex - ecx) / rx;
-            double wrapped_nx = nx + 2.0; // shift from left side to right side
-            double wrapped_ex = ecx + wrapped_nx * rx;
-            if (wrapped_ex >= 0 && wrapped_ex < ew) {
-                auto sp = ell.pix((int)round(wrapped_ex), ey);
-                int sp_max = std::max({sp[0], sp[1], sp[2]});
-                if (sp_max > 25) {
-                    auto dp = ell.pix(ex, ey);
-                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
-                }
+        if (first < 0) continue;
+        
+        if (first > 0) {
+            auto sp = ell.pix(first, ey);
+            for (int ex = 0; ex < first; ++ex) {
+                auto dp = ell.pix(ex, ey);
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
             }
         }
-        // Fill dark pixels on the right side by wrapping from the left side
-        for (int ex = last + 1; ex < ew; ++ex) {
-            double nx = (ex - ecx) / rx;
-            double wrapped_nx = nx - 2.0; // shift from right side to left side
-            double wrapped_ex = ecx + wrapped_nx * rx;
-            if (wrapped_ex >= 0 && wrapped_ex < ew) {
-                auto sp = ell.pix((int)round(wrapped_ex), ey);
-                int sp_max = std::max({sp[0], sp[1], sp[2]});
-                if (sp_max > 25) {
-                    auto dp = ell.pix(ex, ey);
-                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
-                }
+        if (last >= 0 && last < ew - 1) {
+            auto sp = ell.pix(last, ey);
+            for (int ex = last + 1; ex < ew; ++ex) {
+                auto dp = ell.pix(ex, ey);
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
             }
         }
     }
 
     // Third pass: for any remaining dark pixels inside the ellipse (near edges),
     // fill by wrapping horizontally: sample from the opposite side of the ellipse.
-    // Use a threshold to catch near-black pixels that are seam artifacts.
+    // Only fill pixels that are nearly pure black (seam artifacts at the texture edge).
     for (int ey = 0; ey < eh; ++ey) {
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
             int maxc = std::max({dp[0], dp[1], dp[2]});
-            if (maxc < 25) {  // Dark pixel threshold
+            if (maxc < 8) {  // Only fix nearly-black pixels
                 double nx = (ex - ecx) / rx;
                 double ny = (ey - ecy) / ry;
                 if (nx * nx + ny * ny <= 1.0) {
@@ -458,14 +438,21 @@ static void generate_stars(Image &frame, int w, int h, unsigned int seed) {
 // Post-processing: repair seam artifacts (isolated dark pixels surrounded by
 // non-dark pixels). These occur at the 180° meridian where the texture edge
 // may have dark pixels due to the source ellipse boundary.
+// Only repairs pixels that are within the earth sphere (not space background).
 // ---------------------------------------------------------------------------
-static void repair_seam(Image &frame) {
+static void repair_seam(Image &frame, double earth_cx, double earth_cy, double earth_r) {
     int w = frame.w, h = frame.h;
     for (int py = 1; py < h - 1; ++py) {
         for (int px = 1; px < w - 1; ++px) {
+            // Skip pixels outside the earth sphere
+            double nx = (px - earth_cx) / earth_r;
+            double ny = (py - earth_cy) / earth_r;
+            if (nx * nx + ny * ny > 1.0) continue;
+
             auto dp = frame.pix(px, py);
             int maxc = std::max({dp[0], dp[1], dp[2]});
-            if (maxc < 25) {
+            // Only repair pixels that are very dark (likely seam artifacts)
+            if (maxc < 15) {
                 int bright_neighbors = 0;
                 int avg_r = 0, avg_g = 0, avg_b = 0;
                 for (int dy = -1; dy <= 1; ++dy) {
@@ -473,7 +460,7 @@ static void repair_seam(Image &frame) {
                         if (dx == 0 && dy == 0) continue;
                         auto np = frame.pix(px + dx, py + dy);
                         int np_maxc = std::max({np[0], np[1], np[2]});
-                        if (np_maxc > 25) {
+                        if (np_maxc > 30) {
                             bright_neighbors++;
                             avg_r += np[0];
                             avg_g += np[1];
@@ -481,7 +468,9 @@ static void repair_seam(Image &frame) {
                         }
                     }
                 }
-                if (bright_neighbors >= 3) {
+                // Require at least 5 bright neighbors to avoid filling
+                // legitimate dark pixels at the edge of the earth sphere
+                if (bright_neighbors >= 5) {
                     dp[0] = avg_r / bright_neighbors;
                     dp[1] = avg_g / bright_neighbors;
                     dp[2] = avg_b / bright_neighbors;
@@ -565,7 +554,7 @@ static void render_frame(Image &frame,
     }
 
     // Repair seam artifacts
-    repair_seam(frame);
+    repair_seam(frame, earth_cx, earth_cy, earth_r);
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +610,7 @@ static void render_single(Image &frame,
     }
 
     // Repair seam artifacts
-    repair_seam(frame);
+    repair_seam(frame, earth_cx, earth_cy, earth_r);
 }
 
 static bool is_water_pixel(const unsigned char *p) {
@@ -769,8 +758,9 @@ static void render_compare(Image &frame,
         p[0] = 255; p[1] = 255; p[2] = 255;
     }
 
-    // Post-processing: repair seam artifacts
-    repair_seam(frame);
+    // Post-processing: repair seam artifacts for both earth spheres
+    repair_seam(frame, earth_cx, earth_cy, earth_r);
+    repair_seam(frame, earth_cx + half_w, earth_cy, earth_r);
 
     // land_pct and water_pct are now set by count_land_water_original() before calling this function
     // They remain unchanged from the caller-provided values.

@@ -1838,7 +1838,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
         "ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames,r_frame_rate "
-        "-of default=noprint_wrappers=1 \"%s\" 2>&1", input_video);
+        "-of default=noprint_wrappers=1 \"%s\" 2>/dev/null", input_video);
     FILE *fp = popen(cmd, "r");
     int vw = 0, vh = 0, num_frames = 0;
     double fps = 30.0;
@@ -1864,7 +1864,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     }
     if (num_frames <= 0) {
         snprintf(cmd, sizeof(cmd),
-            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>&1",
+            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>/dev/null",
             input_video);
         fp = popen(cmd, "r");
         double dur = 0;
@@ -1891,28 +1891,28 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     // Step 2: Detect ellipse on first frame
     printf("\n步骤2: 提取第一帧并检测椭圆...\n");
-    // Step 2: Detect ellipse on first frame
-    printf("\n步骤2: 提取第一帧并检测椭圆...\n");
-    // Use temp file approach since ffmpeg pipe has issues in Termux
-    printf("\n步骤2: 提取第一帧并检测椭圆...\n");
-    // Use temp file approach since ffmpeg pipe has issues in Termux
     snprintf(cmd, sizeof(cmd),
-        "mkdir -p /data/data/com.termux/files/home/code/mollweide/frames && "
-        "ffmpeg -nostdin -y -i \"%s\" -vframes 1 -update 1 "
-        "/data/data/com.termux/files/home/code/mollweide/frames/frame_first.png 2>&1",
-        input_video);
-    int ffret = system(cmd);
-    if (ffret != 0) {
-        fprintf(stderr, "无法提取第一帧 (ffmpeg返回 %d)\n", ffret>>8);
-        return 1;
+        "ffmpeg -y -i \"%s\" -vframes 1 -f image2pipe -vcodec ppm - 2>/dev/null", input_video);
+    fp = popen(cmd, "r");
+    if (!fp) { fprintf(stderr, "无法启动 ffmpeg\n"); return 1; }
+    char ppm_header[256];
+    int ppm_w = 0, ppm_h = 0, ppm_max = 0;
+    if (!fgets(ppm_header, sizeof(ppm_header), fp) ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d %d", &ppm_w, &ppm_h) != 2 ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d", &ppm_max) != 1) {
+        pclose(fp); fprintf(stderr, "无法读取第一帧\n"); return 1;
     }
     Image first_frame;
-    if (!first_frame.load("/data/data/com.termux/files/home/code/mollweide/frames/frame_first.png")) {
-        fprintf(stderr, "无法加载第一帧\n");
-        return 1;
+    first_frame.create(ppm_w, ppm_h);
+    size_t ppm_size = (size_t)ppm_w * ppm_h * 3;
+    size_t read_bytes = fread(first_frame.data.data(), 1, ppm_size, fp);
+    pclose(fp);
+    if (read_bytes != ppm_size) {
+        fprintf(stderr, "第一帧数据不完整\n"); return 1;
     }
-    printf("  第一帧: %dx%d\n", first_frame.w, first_frame.h);
-    printf("  第一帧: %dx%d\n", first_frame.w, first_frame.h);
+    printf("  第一帧: %dx%d\n", ppm_w, ppm_h);
 
     double cx, cy, rx, ry;
     if (!find_ellipse(first_frame, cx, cy, rx, ry)) {
@@ -1940,7 +1940,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     // Open decoder
     snprintf(cmd, sizeof(cmd),
-        "ffmpeg -nostdin -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>&1", input_video);
+        "ffmpeg -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>/dev/null", input_video);
     FILE *dec_pipe = popen(cmd, "r");
     if (!dec_pipe) { fprintf(stderr, "无法启动解码器\n"); return 1; }
 
@@ -1948,7 +1948,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     snprintf(cmd, sizeof(cmd),
         "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.2f -i - "
         "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
-        "\"%s\" 2>&1",
+        "\"%s\" 2>/dev/null",
         FW, FH, fps, output_video);
     FILE *enc_pipe = popen(cmd, "w");
     if (!enc_pipe) { pclose(dec_pipe); fprintf(stderr, "无法启动编码器\n"); return 1; }
@@ -1964,7 +1964,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     int processed = 0;
     for (int f = 0; f < num_frames; ++f) {
-        // Read raw frame from decoder (consume input)
+        // Read raw frame from decoder
         size_t nread = fread(raw_buf.data(), 1, frame_size_src, dec_pipe);
         if (nread != frame_size_src) {
             if (feof(dec_pipe)) break;
@@ -2062,6 +2062,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     return enc_ret == 0 ? 0 : 1;
 }
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);

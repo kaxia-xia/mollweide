@@ -1825,13 +1825,9 @@ static int mode_journey(const char *input_file, int total_frames,
 // Mode 6: Journey from video — extract texture from each frame of input video,
 //         render journey animation (lat/lon gradient) to output video.
 //   Split point: split_frame (default: half of total frames)
-//   First half:  lat from -23.5° (Tropic of Capricorn) to 0° (Equator)
-//                lon from 180° westward to 0°
-//   Second half: lat from 0° (Equator) to +23.5° (Tropic of Cancer)
-//                lon from 0° eastward to 180°
-// ---------------------------------------------------------------------------
 static int mode_journey_video(const char *input_video, const char *output_video,
                                int split_frame_sec) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     printf("=== 旅程模式 (视频输入) ===\n");
     printf("输入视频: %s\n", input_video);
     printf("输出视频: %s\n", output_video);
@@ -1842,7 +1838,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),
         "ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames,r_frame_rate "
-        "-of default=noprint_wrappers=1 \"%s\" 2>/dev/null", input_video);
+        "-of default=noprint_wrappers=1 \"%s\" 2>&1", input_video);
     FILE *fp = popen(cmd, "r");
     int vw = 0, vh = 0, num_frames = 0;
     double fps = 30.0;
@@ -1868,7 +1864,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     }
     if (num_frames <= 0) {
         snprintf(cmd, sizeof(cmd),
-            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>/dev/null",
+            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>&1",
             input_video);
         fp = popen(cmd, "r");
         double dur = 0;
@@ -1896,7 +1892,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     // Step 2: Detect ellipse on first frame
     printf("\n步骤2: 提取第一帧并检测椭圆...\n");
     snprintf(cmd, sizeof(cmd),
-        "ffmpeg -y -i \"%s\" -vframes 1 -f image2pipe -vcodec ppm - 2>/dev/null", input_video);
+        "ffmpeg -y -i \"%s\" -vframes 1 -f image2pipe -vcodec ppm - 2>&1", input_video);
     fp = popen(cmd, "r");
     if (!fp) { fprintf(stderr, "无法启动 ffmpeg\n"); return 1; }
     char ppm_header[256];
@@ -1922,6 +1918,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
     if (!find_ellipse(first_frame, cx, cy, rx, ry)) {
         fprintf(stderr, "第一帧无法找到椭圆!\n"); return 1;
     }
+
     // Count land/water from first frame
     double land_pct, water_pct;
     count_land_water_original(first_frame, cx, cy, rx, ry, land_pct, water_pct);
@@ -1935,32 +1932,27 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     // Step 3: Stream process
     printf("\n步骤3: 流式处理 %d 帧...\n", num_frames);
+
     const int FW = 1920, FH = 1080;
     const double ER = 420.0;
     const double ECX = FW / 2.0;
     const double ECY = FH / 2.0;
 
-    // Count land/water from first frame
-    count_land_water_original(first_frame, cx, cy, rx, ry, land_pct, water_pct);
-    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
-
-    // Step 3: Stream process
-    printf("\n步骤3: 流式处理 %d 帧...\n", num_frames);
-
     // Open decoder
     snprintf(cmd, sizeof(cmd),
-        "ffmpeg -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>/dev/null", input_video);
+        "ffmpeg -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>&1", input_video);
     FILE *dec_pipe = popen(cmd, "r");
+    if (!dec_pipe) { fprintf(stderr, "无法启动解码器\n"); return 1; }
+
     // Open encoder
     snprintf(cmd, sizeof(cmd),
         "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.2f -i - "
         "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
-        "\"%s\" 2>/dev/null",
+        "\"%s\" 2>&1",
         FW, FH, fps, output_video);
     FILE *enc_pipe = popen(cmd, "w");
     if (!enc_pipe) { pclose(dec_pipe); fprintf(stderr, "无法启动编码器\n"); return 1; }
 
-    // Buffers
     // Buffers
     std::vector<unsigned char> raw_buf((size_t)vw * vh * 3);
     Image frame_src;
@@ -1972,7 +1964,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     int processed = 0;
     for (int f = 0; f < num_frames; ++f) {
-        // Read raw frame from decoder
+        // Read raw frame from decoder (consume input)
         size_t nread = fread(raw_buf.data(), 1, frame_size_src, dec_pipe);
         if (nread != frame_size_src) {
             if (feof(dec_pipe)) break;
@@ -1999,7 +1991,6 @@ static int mode_journey_video(const char *input_video, const char *output_video,
         generate_stars(frame_out, FW, FH, 42 + f);
         render_frame(frame_out, ECX, ECY, ER, lon0, lat0,
                       ell_template, ecx, ecy, rx, ry);
-        // Draw info
 
         // Draw info
         int lat_deg = (int)round(lat0 * 180 / PI);
@@ -2052,7 +2043,7 @@ static int mode_journey_video(const char *input_video, const char *output_video,
         fwrite(frame_out.data.data(), 1, frame_size_out, enc_pipe);
 
         processed++;
-        if (processed % 30 == 0 || processed == num_frames || processed == 1) {
+        if (processed % 60 == 0 || processed == num_frames || processed == 1) {
             printf("  帧 %4d/%d (%.0f%%) [%s] Lat=%+d Lon=%d\n",
                    processed, num_frames, 100.0 * processed / num_frames,
                    phase_label, lat_deg, lon_deg);
@@ -2071,7 +2062,6 @@ static int mode_journey_video(const char *input_video, const char *output_video,
 
     return enc_ret == 0 ? 0 : 1;
 }
-
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);
@@ -2088,7 +2078,6 @@ int main(int argc, char **argv) {
         const char *output_video = "output.mp4";
         double lat0 = 0.0;
         const char *out_dir = "frames";
-        for (int i = 3; i < argc; ++i) {
         for (int i = 3; i < argc; ++i) {
             if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
                 output_video = argv[++i];
@@ -2148,6 +2137,9 @@ int main(int argc, char **argv) {
 
         return mode_journey_video(input_video, output_video, split_sec);
     }
+
+    // Normal mode
+    // Normal mode
     // Normal mode
     // Normal mode
     // Normal mode

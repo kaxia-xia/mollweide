@@ -1,0 +1,79 @@
+=== 旅程模式 ===
+输入: test/test5.jpg
+总帧数: 3958
+输出目录: frames
+
+模式: 紫色辉光奇幻模式
+输入图片: 2560 x 1600
+  Center of mass: (1075.9, 699.4), count=2222278
+  Ellipse: center=(1061.3,604.5), rx=1026.7, ry=508.0 (shrunk)
+  Ellipse image: 4111 x 1021
+
+输出: 1920x1080, 地球半径=420px
+
+陆地: 27.9%, 海洋: 72.1%
+  帧    1/3958 (0%) [Capricorn->Equator] Lat=-24 Lon=180
+  帧   10/3958 (0%) [Capricorn->Equator] Lat=-23 Lon=179
+  帧   20/3958 (1%) [Capricorn->Equator] Lat=-23 Lon=178
+  帧   30/3958 (1%) [Capricorn->Equator] Lat=-23 Lon=177
+  帧   40/3958 (1%) [Capricorn->Equator] Lat=-23 Lon=176
+  帧   50/3958 (1%) [Capricorn->Equator] Lat=-23 Lon=176
+  帧   60/3958 (2%) [Capricorn->Equator] Lat=-23 Lon=175
+  帧   70/3958 (2%) [Capricorn->Equator] Lat=-23 Lon=174
+  帧   80/3958 (2%) [Capricorn->Equator] Lat=-23 Lon=173
+  帧   90/3958 (2%) [Capricorn->Equator] Lat=-22 Lon=172
+  帧  100/3958 (3%) [Capricorn->Equator] Lat=-22 Lon=171
+  帧  110/3958 (3%) [Capricorn->Equator] Lat=-22 Lon=170
+  帧  120/3958 (3%) [Capricorn->Equator] Lat=-22 Lon=169
+  帧  130/3958 (3%) [Capricorn->Equator] Lat=-22 Lon=168
+  帧  140/3958 (4%) [Capricorn->Equator] Lat=-22 Lon=167
+  帧  150/3958 (4%) [Capricorn->Equator] Lat=-22 Lon=166
+  帧  160/3958 (4%) [Capricorn->Equator] Lat=-22 Lon=166
+  帧  170/3958 (4%) [Capricorn->Equator] Lat=-21 Lon=165
+  帧  180/3958 (5%) [Capricorn->Equator] Lat=-21 Lon=164
+  帧  190/3958 (5%) [Capricorn->Equator] Lat=-21 Lon=163
+  帧  200/3958 (5%) [Capricorn->Equator] Lat=-21 Lon=162
+  帧  210/3958 (5%) [Capricorn->Equator] Lat=-21 Lon=161
+  帧  220/3958 (6%) [Capricorn->Equator] Lat=-21 Lon=160
+  帧  230/3958 (6%) [Capricorn->Equator] Lat=-21 Lon=159
+  帧  240/3958 (6%) [Capricorn->Equator] Lat=-21 Lon=158
+  帧  250/3958 (6%) [Capricorn->Equator] Lat=-21 Lon=157
+  帧  260/3958 (7%) [Capricorn->Equator] Lat=-20 Lon=156
+  帧  270/3958 (7%) [Capricorn->Equator] Lat=-20 Lon=156
+  帧  280/3958 (7%) [Capricorn->Equator] Lat=-20 Lon=155
+  帧  290/3958 (7%) [Capricorn->Equator] Lat=-20 Lon=154
+  帧  300/3958 (8%) [Capricorn->Equator] Lat=-20 Lon=153
+  帧  310/3958 (8%) [Capricorn->Equator] Lat=-20 Lon=152
+  帧  320/3958 (8%) [Capricorn->Equator] Lat=-20 Lon=151
+  帧  330/3958 (8%) [Capricorn->Equator] Lat=-20 Lon=150
+  帧  340/3958 (9%) [Capricorn->Equator] Lat=-19 Lon=149
+  帧  350/3958 (9%) [Capricorn->Equator] Lat=-19 Lon=148
+  帧  360/3958 (9%) [Capricorn->Equator] Lat=-19 Lon=147
+  帧  370/3958 (9%) [Capricorn->Equator] Lat=-19 Lon=146
+  帧  380/3958 (10%) [Capricorn->Equator] Lat=-19 Lon=146
+  帧  390/3958 (10%) [Capricorn->Equator] Lat=-19 Lon=145
+  帧  400/3958 (10%) [Capricorn->Equator] Lat=-19 Lon=144
+  帧  410/3958 (10%) [Capricorn->Equator] Lat=-19 Lon=143
+  帧  420/3958 (11%) [Capricorn->Equator] Lat=-19 Lon=142
+  帧  430/3958 (11%) [Capricorn->Equator] Lat=-18 Lon=141
+  帧  440/3958 (11%) [Capricorn->Equator] Lat=-18 Lon=140
+  帧  450/3958 (11%) [Capricorn->Equator] Lat=-18 Lon=139
+  帧  460/3958 (12%) [Capricorn->Equator] Lat=-18 Lon=138
+  帧  470/3958 (12%) [Capricorn->Equator] Lat=-18 Lon=137
+  帧  480/3958 (12%) [Capricorn->Equator] Lat=-18 Lon=136
+  帧  490/3958 (12%) [Capricorn->Equator] Lat=-18 Lon=136
+  帧  500/3958 (13%) [Capricorn->Equator] Lat=-18 Lon=135
+  帧  510/3958 (13%) [Capricorn->Equator] Lat=-17 Lon=134
+  帧  520/3958 (13%) [Capricorn->Equator] Lat=-17 Lon=133
+  帧  530/3958 (13%) [Capricorn->Equator] Lat=-17 Lon=132
+  帧  540/3958 (14%) [Capricorn->Equator] Lat=-17 Lon=131
+  帧  550/3958 (14%) [Capricorn->Equator] Lat=-17 Lon=130
+  帧  560/3958 (14%) [Capricorn->Equator] Lat=-17 Lon=129
+  帧  570/3958 (14%) [Capricorn->Equator] Lat=-17 Lon=128
+  帧  580/3958 (15%) [Capricorn->Equator] Lat=-17 Lon=127
+  帧  590/3958 (15%) [Capricorn->Equator] Lat=-17 Lon=126
+  帧  600/3958 (15%) [Capricorn->Equator] Lat=-16 Lon=126
+  帧  610/3958 (15%) [Capricorn->Equator] Lat=-16 Lon=125
+  帧  620/3958 (16%) [Capricorn->Equator] Lat=-16 Lon=124
+  帧  630/3958 (16%) [Capricorn->Equator] Lat=-16 Lon=123
+  帧  

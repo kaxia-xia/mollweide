@@ -1024,11 +1024,15 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
 
     printf("\n输出: %dx%d, 地球半径=%.0fpx\n\n", FW, FH, ER);
 
+    // Pre-allocate frame buffer (reuse for all frames)
+    Image frame;
+    frame.create(FW, FH, 0, 0, 0);
+
     for (int f = 0; f < num_frames; ++f) {
         double lon0 = 2.0 * PI * f / num_frames;
 
-        Image frame;
-        frame.create(FW, FH, 0, 0, 0);
+        // Clear frame to black (reuse buffer)
+        memset(frame.data.data(), 0, frame.data.size());
 
         generate_stars(frame, FW, FH, 42 + f);
         render_frame(frame, ECX, ECY, ER, lon0, lat0,
@@ -1037,7 +1041,11 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         char fn[256];
         snprintf(fn, sizeof(fn), "%s/frame_%04d.png", out_dir, f);
         frame.save_png(fn);
-        frame.save_png(fn);
+
+        // Progress indicator
+        if ((f + 1) % 10 == 0 || f == 0 || f == num_frames - 1) {
+            printf("  帧 %4d/%d (%.0f%%)\n", f + 1, num_frames, 100.0 * (f + 1) / num_frames);
+        }
     }
     printf("\n完成! 共 %d 帧 -> %s/\n", num_frames, out_dir);
 

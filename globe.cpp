@@ -699,6 +699,7 @@ static void render_single(Image &frame,
 static bool is_water_pixel(const unsigned char *p) {
     int r = p[0], g = p[1], b = p[2];
     int maxc = std::max({r, g, b});
+    int minc = std::min({r, g, b});
     if (maxc < 3) return true;
 
     // Key insight: in true ocean, BLUE is significantly higher than BOTH
@@ -716,6 +717,20 @@ static bool is_water_pixel(const unsigned char *p) {
 
     // 4) Bright white/cyan over water: blue clearly dominates
     if (r > 240 && g > 240 && b > 240 && b > r && b > g) return true;
+
+    // --- Snowball Earth (test2.jpg) specific rules ---
+    // In snowball Earth maps, the ocean is covered by bright white ice,
+    // while land appears as gray/brown exposed rock.
+    
+    // 4b) Bright white ice ocean: very bright, nearly uniform, slight blue tint
+    // Allow b to be slightly lower than r or g (within 3) for snowy ice
+    if (maxc > 235 && (maxc - minc) < 18 && b >= r - 3 && b >= g - 3) return true;
+    
+    // 4c) Medium-bright blue-gray ice ocean: blue channel clearly dominant
+    if (maxc >= 150 && maxc <= 240 && b > r + 12 && b > g + 8) return true;
+
+    // 4d) Medium gray land: blue not dominant enough, or colors are too balanced
+    // (fall through to return false)
 
     return false;
 }

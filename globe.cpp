@@ -1033,8 +1033,10 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
     Image frame;
     frame.create(FW, FH, 0, 0, 0);
 
+    // num_frames = 圈数 * 360, 所以总旋转角度 = 圈数 * 2*PI
+    double total_rotation = 2.0 * PI * num_frames / 360.0;
     for (int f = 0; f < num_frames; ++f) {
-        double lon0 = 2.0 * PI * f / num_frames;
+        double lon0 = total_rotation * f / num_frames;
 
         // Clear frame to black (reuse buffer)
         memset(frame.data.data(), 0, frame.data.size());

@@ -1043,10 +1043,29 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         render_frame(frame, ECX, ECY, ER, lon0, lat0,
                       ell, ecx, ecy, rx, ry);
 
-        // Draw land/water percentage on frame
+        // Draw land/water percentage on frame (large text, 3x scaled)
         char info_text[64];
         snprintf(info_text, sizeof(info_text), "Land: %.1f%%  Water: %.1f%%", land_pct, water_pct);
-        draw_text(frame, 10, FH - 20, info_text, 255, 255, 255);
+        // Determine text color based on mode
+        unsigned char tr = 255, tg = 255, tb = 255;
+        if (purple_mode) { tr = 200; tg = 100; tb = 255; } // purple-ish white
+        int text_x = 20;
+        int text_y = FH - 40;
+        for (int ci = 0; info_text[ci]; ++ci) {
+            int cx = text_x + ci * 27;
+            unsigned char ch = (unsigned char)info_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame.set_pixel(cx + col*3 + dx, text_y + row*3 + dy, tr, tg, tb);
+                    }
+                }
+            }
+        }
 
         char fn[256];
         snprintf(fn, sizeof(fn), "%s/frame_%04d.png", out_dir, f);

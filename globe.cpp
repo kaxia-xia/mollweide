@@ -1821,6 +1821,257 @@ static int mode_journey(const char *input_file, int total_frames,
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Mode 6: Journey from video — extract texture from each frame of input video,
+//         render journey animation (lat/lon gradient) to output video.
+//   Split point: split_frame (default: half of total frames)
+//   First half:  lat from -23.5° (Tropic of Capricorn) to 0° (Equator)
+//                lon from 180° westward to 0°
+//   Second half: lat from 0° (Equator) to +23.5° (Tropic of Cancer)
+//                lon from 0° eastward to 180°
+// ---------------------------------------------------------------------------
+static int mode_journey_video(const char *input_video, const char *output_video,
+                               int split_frame_sec) {
+    printf("=== 旅程模式 (视频输入) ===\n");
+    printf("输入视频: %s\n", input_video);
+    printf("输出视频: %s\n", output_video);
+    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
+
+    // Step 1: Probe video info
+    printf("\n步骤1: 探测视频信息...\n");
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames,r_frame_rate "
+        "-of default=noprint_wrappers=1 \"%s\" 2>/dev/null", input_video);
+    FILE *fp = popen(cmd, "r");
+    int vw = 0, vh = 0, num_frames = 0;
+    double fps = 30.0;
+    if (fp) {
+        char line[128];
+        while (fgets(line, sizeof(line), fp)) {
+            char key[64], val[64];
+            if (sscanf(line, "width=%63s", val) == 1) vw = atoi(val);
+            if (sscanf(line, "height=%63s", val) == 1) vh = atoi(val);
+            if (sscanf(line, "nb_frames=%63s", val) == 1) num_frames = atoi(val);
+            if (sscanf(line, "r_frame_rate=%63s", val) == 1) {
+                int n = 0, d = 1;
+                if (sscanf(val, "%d/%d", &n, &d) == 2 && d > 0) fps = (double)n / d;
+                else fps = atof(val);
+                if (fps <= 0) fps = 30.0;
+            }
+        }
+        pclose(fp);
+    }
+    if (vw <= 0 || vh <= 0) {
+        fprintf(stderr, "无法获取视频信息\n");
+        return 1;
+    }
+    if (num_frames <= 0) {
+        snprintf(cmd, sizeof(cmd),
+            "ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 \"%s\" 2>/dev/null",
+            input_video);
+        fp = popen(cmd, "r");
+        double dur = 0;
+        if (fp) {
+            char buf[64];
+            if (fgets(buf, sizeof(buf), fp)) dur = atof(buf);
+            pclose(fp);
+        }
+        if (dur > 0) num_frames = (int)(dur * fps + 0.5);
+        else { fprintf(stderr, "无法确定帧数\n"); return 1; }
+    }
+    printf("  分辨率: %dx%d, 帧率: %.2f, 总帧数: %d\n", vw, vh, fps, num_frames);
+
+    // Determine split frame
+    int split_frame;
+    if (split_frame_sec > 0) {
+        split_frame = (int)(split_frame_sec * fps + 0.5);
+        if (split_frame >= num_frames) split_frame = num_frames / 2;
+    } else {
+        split_frame = num_frames / 2;
+    }
+    printf("  分界点: 第 %d 帧 (%.1f 秒)\n", split_frame, split_frame / fps);
+    printf("  前半段: 0~%d, 后半段: %d~%d\n", split_frame-1, split_frame, num_frames-1);
+
+    // Step 2: Detect ellipse on first frame
+    printf("\n步骤2: 提取第一帧并检测椭圆...\n");
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -i \"%s\" -vframes 1 -f image2pipe -vcodec ppm - 2>/dev/null", input_video);
+    fp = popen(cmd, "r");
+    if (!fp) { fprintf(stderr, "无法启动 ffmpeg\n"); return 1; }
+    char ppm_header[256];
+    int ppm_w = 0, ppm_h = 0, ppm_max = 0;
+    if (!fgets(ppm_header, sizeof(ppm_header), fp) ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d %d", &ppm_w, &ppm_h) != 2 ||
+        !fgets(ppm_header, sizeof(ppm_header), fp) ||
+        sscanf(ppm_header, "%d", &ppm_max) != 1) {
+        pclose(fp); fprintf(stderr, "无法读取第一帧\n"); return 1;
+    }
+    Image first_frame;
+    first_frame.create(ppm_w, ppm_h);
+    size_t ppm_size = (size_t)ppm_w * ppm_h * 3;
+    size_t read_bytes = fread(first_frame.data.data(), 1, ppm_size, fp);
+    pclose(fp);
+    if (read_bytes != ppm_size) {
+        fprintf(stderr, "第一帧数据不完整\n"); return 1;
+    }
+    printf("  第一帧: %dx%d\n", ppm_w, ppm_h);
+
+    double cx, cy, rx, ry;
+    if (!find_ellipse(first_frame, cx, cy, rx, ry)) {
+        fprintf(stderr, "第一帧无法找到椭圆!\n"); return 1;
+    }
+    // Count land/water from first frame
+    double land_pct, water_pct;
+    count_land_water_original(first_frame, cx, cy, rx, ry, land_pct, water_pct);
+    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
+
+    // Extract ellipse texture from first frame (reuse for all frames)
+    Image ell_template;
+    double ecx, ecy;
+    extract_ellipse(first_frame, cx, cy, rx, ry, ell_template, ecx, ecy);
+    printf("椭圆纹理: %dx%d\n", ell_template.w, ell_template.h);
+
+    // Step 3: Stream process
+    printf("\n步骤3: 流式处理 %d 帧...\n", num_frames);
+    const int FW = 1920, FH = 1080;
+    const double ER = 420.0;
+    const double ECX = FW / 2.0;
+    const double ECY = FH / 2.0;
+
+    // Count land/water from first frame
+    count_land_water_original(first_frame, cx, cy, rx, ry, land_pct, water_pct);
+    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
+
+    // Step 3: Stream process
+    printf("\n步骤3: 流式处理 %d 帧...\n", num_frames);
+
+    // Open decoder
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -i \"%s\" -f rawvideo -pix_fmt rgb24 - 2>/dev/null", input_video);
+    FILE *dec_pipe = popen(cmd, "r");
+    // Open encoder
+    snprintf(cmd, sizeof(cmd),
+        "ffmpeg -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.2f -i - "
+        "-c:v libx264 -pix_fmt yuv420p -crf 23 -an "
+        "\"%s\" 2>/dev/null",
+        FW, FH, fps, output_video);
+    FILE *enc_pipe = popen(cmd, "w");
+    if (!enc_pipe) { pclose(dec_pipe); fprintf(stderr, "无法启动编码器\n"); return 1; }
+
+    // Buffers
+    // Buffers
+    std::vector<unsigned char> raw_buf((size_t)vw * vh * 3);
+    Image frame_src;
+    frame_src.create(vw, vh);
+    Image frame_out;
+    frame_out.create(FW, FH);
+    size_t frame_size_src = (size_t)vw * vh * 3;
+    size_t frame_size_out = (size_t)FW * FH * 3;
+
+    int processed = 0;
+    for (int f = 0; f < num_frames; ++f) {
+        // Read raw frame from decoder
+        size_t nread = fread(raw_buf.data(), 1, frame_size_src, dec_pipe);
+        if (nread != frame_size_src) {
+            if (feof(dec_pipe)) break;
+            continue;
+        }
+
+        // Calculate lat/lon for this frame
+        double lat0, lon0;
+        const char *phase_label;
+        if (f < split_frame) {
+            double t = (double)f / split_frame;
+            lat0 = (-23.5 + t * 23.5) * PI / 180.0;
+            lon0 = (180.0 - t * 180.0) * PI / 180.0;
+            phase_label = "Capricorn->Equator";
+        } else {
+            double t = (double)(f - split_frame) / (num_frames - split_frame);
+            lat0 = (t * 23.5) * PI / 180.0;
+            lon0 = (t * 180.0) * PI / 180.0;
+            phase_label = "Equator->Cancer";
+        }
+
+        // Render frame using pre-extracted ellipse texture
+        memset(frame_out.data.data(), 0, frame_size_out);
+        generate_stars(frame_out, FW, FH, 42 + f);
+        render_frame(frame_out, ECX, ECY, ER, lon0, lat0,
+                      ell_template, ecx, ecy, rx, ry);
+        // Draw info
+
+        // Draw info
+        int lat_deg = (int)round(lat0 * 180 / PI);
+        int lon_deg = (int)round(lon0 * 180 / PI);
+
+        draw_text(frame_out, 20, 20, phase_label, 200, 200, 255);
+
+        char coord_text[64];
+        snprintf(coord_text, sizeof(coord_text), "Lat: %+d  Lon: %d", lat_deg, lon_deg);
+        int coord_x = FW - (int)strlen(coord_text) * 9 - 20;
+        draw_text(frame_out, coord_x, 20, coord_text, 255, 255, 100);
+
+        char info_text[64];
+        snprintf(info_text, sizeof(info_text), "Land: %.1f%%  Water: %.1f%%", land_pct, water_pct);
+        unsigned char tr = 255, tg = 255, tb = 255;
+        if (purple_mode) { tr = 200; tg = 100; tb = 255; }
+        int text_x = 20;
+        int text_y = FH - 40;
+        for (int ci = 0; info_text[ci]; ++ci) {
+            int cx2 = text_x + ci * 27;
+            unsigned char ch = (unsigned char)info_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame_out.set_pixel(cx2 + col*3 + dx, text_y + row*3 + dy, tr, tg, tb);
+                    }
+                }
+            }
+        }
+
+        // Progress bar
+        int bar_x = 20;
+        int bar_y = FH - 15;
+        int bar_w = FW - 40;
+        int bar_h = 8;
+        int filled = (int)(bar_w * (f + 1) / num_frames);
+        for (int by = 0; by < bar_h; ++by) {
+            for (int bx = 0; bx < bar_w; ++bx) {
+                unsigned char cr = 40, cg = 40, cb = 40;
+                if (bx < filled) { cr = 100; cg = 200; cb = 255; }
+                frame_out.set_pixel(bar_x + bx, bar_y + by, cr, cg, cb);
+            }
+        }
+
+        // Write to encoder
+        fwrite(frame_out.data.data(), 1, frame_size_out, enc_pipe);
+
+        processed++;
+        if (processed % 30 == 0 || processed == num_frames || processed == 1) {
+            printf("  帧 %4d/%d (%.0f%%) [%s] Lat=%+d Lon=%d\n",
+                   processed, num_frames, 100.0 * processed / num_frames,
+                   phase_label, lat_deg, lon_deg);
+        }
+    }
+
+    pclose(dec_pipe);
+    int enc_ret = pclose(enc_pipe);
+
+    printf("\n完成! 处理 %d 帧\n", processed);
+    if (enc_ret == 0) {
+        printf("视频已保存: %s\n", output_video);
+    } else {
+        fprintf(stderr, "视频合成可能有问题 (ffmpeg返回 %d = %d>>8)\n", enc_ret, enc_ret>>8);
+    }
+
+    return enc_ret == 0 ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);
@@ -1837,7 +2088,7 @@ int main(int argc, char **argv) {
         const char *output_video = "output.mp4";
         double lat0 = 0.0;
         const char *out_dir = "frames";
-
+        for (int i = 3; i < argc; ++i) {
         for (int i = 3; i < argc; ++i) {
             if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
                 output_video = argv[++i];
@@ -1848,9 +2099,9 @@ int main(int argc, char **argv) {
             else if (i == argc - 1 && argv[i][0] != '-')
                 out_dir = argv[i];
         }
-
         return mode_video(input_video, output_video, lat0, out_dir);
     }
+
 
     // Check for --journey mode
     if (strcmp(argv[1], "--journey") == 0) {
@@ -1877,7 +2128,28 @@ int main(int argc, char **argv) {
 
         return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
     }
+    if (strcmp(argv[1], "--journey-video") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "错误: --journey-video 需要指定输入视频文件\n");
+            return 1;
+        }
+        const char *input_video = argv[2];
+        const char *output_video = "journey_video.mp4";
+        int split_sec = 0;  // 0 = auto (half)
 
+        for (int i = 3; i < argc; ++i) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+                output_video = argv[++i];
+            else if (strcmp(argv[i], "--purple") == 0)
+                purple_mode = true;
+            else if (strcmp(argv[i], "--split") == 0 && i + 1 < argc)
+                split_sec = atoi(argv[++i]);
+        }
+
+        return mode_journey_video(input_video, output_video, split_sec);
+    }
+    // Normal mode
+    // Normal mode
     // Normal mode
     setvbuf(stdout, NULL, _IONBF, 0);
     const char *input_file = argv[1];

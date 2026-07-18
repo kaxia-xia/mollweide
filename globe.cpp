@@ -9,6 +9,16 @@
 //
 // 缩小椭圆0.966
 // ============================================================================
+// globe.cpp — 地球旋转视频帧生成器
+//
+// 功能：
+//   1. 生成旋转地球视频帧
+//   2. 指定经度/纬度输出单张图片
+//   3. 生成 0°/180° 双视角对比图（带陆地/海洋比例）
+//   4. 处理视频（逐帧生成对比图再合成新视频）
+//
+// 缩小椭圆0.966
+// ============================================================================
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -188,42 +198,66 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
 
-    // Normalize mx to [-1, 1] range with wrapping
-    double wmx = mx;
-    while (wmx > 1.0) wmx -= 2.0;
-    while (wmx < -1.0) wmx += 2.0;
+    // Clamp mx slightly to avoid sampling at the very edge of the texture
+    // where bilinear interpolation may pick up dark boundary pixels.
+    // The Mollweide projection's 180° meridian (mx=±1) maps to the left/right
+    // edges of the ellipse texture. Sampling at exactly mx=±1 can produce
+    // seam artifacts, so we inset slightly.
+    const double mx_inset = 0.99;
+    double wmx = std::clamp(mx, -mx_inset, mx_inset);
+
+    // Compute wrapped mx (shift by ±2 to get the other side of the texture)
+    double wmx2 = (wmx >= 0.0) ? wmx - 2.0 : wmx + 2.0;
 
     // Primary sample
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
 
-    // If sampled pixel is black/dark (edge of extracted texture), try the wrapped side
-    if (r < 8 && g < 8 && b < 8) {
-        double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
-        double ex2 = ecx + wmx2 * rx;
-        unsigned char r2 = 0, g2 = 0, b2 = 0;
-        sample_bilinear(ell, ex2, ey, r2, g2, b2);
-        if (r2 > 8 || g2 > 8 || b2 > 8) {
-            r = r2; g = g2; b = b2;
-        }
+    // Wrapped sample
+    double ex2 = ecx + wmx2 * rx;
+    unsigned char r2 = 0, g2 = 0, b2 = 0;
+    sample_bilinear(ell, ex2, ey, r2, g2, b2);
+
+    bool primary_valid = (r > 8 || g > 8 || b > 8);
+    bool wrapped_valid = (r2 > 8 || g2 > 8 || b2 > 8);
+
+    // If primary sample is invalid (dark edge), use wrapped sample
+    if (!primary_valid && wrapped_valid) {
+        r = r2; g = g2; b = b2;
+        return true;
     }
 
-    // Near the ±180° meridian (|mx| > 0.92), blend with the wrapped side
+    // If both are valid and we're near the ±180° meridian (|mx| > 0.85), blend
     // to ensure seamless transition at the date line
-    double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.92) / 0.08);
-    if (wrap_blend > 0.0) {
-        double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
-        double ex2 = ecx + wmx2 * rx;
-        unsigned char r2 = 0, g2 = 0, b2 = 0;
-        sample_bilinear(ell, ex2, ey, r2, g2, b2);
-        // Only blend if the wrapped sample is valid (not black)
-        if (r2 > 8 || g2 > 8 || b2 > 8) {
+    if (primary_valid && wrapped_valid) {
+        double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.85) / 0.15);
+        if (wrap_blend > 0.0) {
             r = (unsigned char)(r * (1.0 - wrap_blend) + r2 * wrap_blend);
             g = (unsigned char)(g * (1.0 - wrap_blend) + g2 * wrap_blend);
             b = (unsigned char)(b * (1.0 - wrap_blend) + b2 * wrap_blend);
         }
     }
+
+    // If neither is valid, try sampling even further inside
+    if (!primary_valid && !wrapped_valid) {
+        double inset = 0.99;
+        double wmx_inset = wmx * inset;
+        double ex_inset = ecx + wmx_inset * rx;
+        sample_bilinear(ell, ex_inset, ey, r, g, b);
+        if (r > 8 || g > 8 || b > 8) return true;
+
+        double wmx2_inset = wmx2 * inset;
+        double ex2_inset = ecx + wmx2_inset * rx;
+        sample_bilinear(ell, ex2_inset, ey, r2, g2, b2);
+        if (r2 > 8 || g2 > 8 || b2 > 8) {
+            r = r2; g = g2; b = b2;
+            return true;
+        }
+
+        return false;
+    }
+
     return true;
 }
 
@@ -297,14 +331,15 @@ static bool find_ellipse(const Image &img, double &cx, double &cy,
 static void extract_ellipse(const Image &src,
                              double cx, double cy, double rx, double ry,
                              Image &ell, double &ecx, double &ecy) {
-    int ew = (int)ceil(2 * rx) + 3;
-    int eh = (int)ceil(2 * ry) + 3;
+    int ew = (int)ceil(2 * rx) + 9;  // Extra padding for seamless wrapping
+    int eh = (int)ceil(2 * ry) + 9;
     if (ew % 2 == 0) ew++;
     if (eh % 2 == 0) eh++;
     ell.create(ew, eh, 0, 0, 0);
     ecx = ew / 2.0;
     ecy = eh / 2.0;
 
+    // First pass: sample all pixels within the ellipse from the source
     for (int ey = 0; ey < eh; ++ey)
         for (int ex = 0; ex < ew; ++ex) {
             double nx = (ex - ecx) / rx;
@@ -317,48 +352,70 @@ static void extract_ellipse(const Image &src,
             }
         }
 
-    // Fill any remaining black edge pixels by copying from nearest colored pixel.
-    // This ensures seamless horizontal wrapping at the 180deg meridian.
+    // Second pass: fill pixels outside the ellipse (but within the texture bounds)
+    // by wrapping horizontally. In Mollweide projection, mx=-1 and mx=+1 represent
+    // the same meridian (180°). So we fill the left padding from the right side
+    // and vice versa, ensuring seamless wrapping at the ±180° meridian.
     for (int ey = 0; ey < eh; ++ey) {
-        int first = -1;
+        // Find the first and last non-dark pixel in this row (inside the ellipse)
+        int first = -1, last = -1;
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
-            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { first = ex; break; }
-        }
-        int last = -1;
-        for (int ex = ew - 1; ex >= 0; --ex) {
-            auto dp = ell.pix(ex, ey);
-            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) { last = ex; break; }
-        }
-        if (first > 0 && last >= first) {
-            auto sp = ell.pix(first, ey);
-            for (int ex = 0; ex < first; ++ex) {
-                auto dp = ell.pix(ex, ey);
-                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc > 25) {
+                if (first < 0) first = ex;
+                last = ex;
             }
-            sp = ell.pix(last, ey);
-            for (int ex = last + 1; ex < ew; ++ex) {
-                auto dp = ell.pix(ex, ey);
-                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+        }
+        if (first < 0) continue; // entire row is dark
+
+        // Fill dark pixels on the left side by wrapping from the right side
+        for (int ex = 0; ex < first; ++ex) {
+            double nx = (ex - ecx) / rx;
+            double wrapped_nx = nx + 2.0; // shift from left side to right side
+            double wrapped_ex = ecx + wrapped_nx * rx;
+            if (wrapped_ex >= 0 && wrapped_ex < ew) {
+                auto sp = ell.pix((int)round(wrapped_ex), ey);
+                int sp_max = std::max({sp[0], sp[1], sp[2]});
+                if (sp_max > 25) {
+                    auto dp = ell.pix(ex, ey);
+                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                }
+            }
+        }
+        // Fill dark pixels on the right side by wrapping from the left side
+        for (int ex = last + 1; ex < ew; ++ex) {
+            double nx = (ex - ecx) / rx;
+            double wrapped_nx = nx - 2.0; // shift from right side to left side
+            double wrapped_ex = ecx + wrapped_nx * rx;
+            if (wrapped_ex >= 0 && wrapped_ex < ew) {
+                auto sp = ell.pix((int)round(wrapped_ex), ey);
+                int sp_max = std::max({sp[0], sp[1], sp[2]});
+                if (sp_max > 25) {
+                    auto dp = ell.pix(ex, ey);
+                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                }
             }
         }
     }
 
-    // Second pass: for any remaining black pixels inside the ellipse (near edges),
+    // Third pass: for any remaining dark pixels inside the ellipse (near edges),
     // fill by wrapping horizontally: sample from the opposite side of the ellipse.
-    // This is critical for seamless rendering at the 180deg meridian.
+    // Use a threshold to catch near-black pixels that are seam artifacts.
     for (int ey = 0; ey < eh; ++ey) {
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
-            if (dp[0] == 0 && dp[1] == 0 && dp[2] == 0) {
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc < 25) {  // Dark pixel threshold
                 double nx = (ex - ecx) / rx;
                 double ny = (ey - ecy) / ry;
                 if (nx * nx + ny * ny <= 1.0) {
                     double wrapped_nx = (nx > 0.0) ? nx - 2.0 : nx + 2.0;
                     double wrapped_ex = ecx + wrapped_nx * rx;
                     if (wrapped_ex >= 0 && wrapped_ex < ew) {
-                        auto sp = ell.pix((int)wrapped_ex, ey);
-                        if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
+                        auto sp = ell.pix((int)round(wrapped_ex), ey);
+                        int sp_max = std::max({sp[0], sp[1], sp[2]});
+                        if (sp_max > 25) {
                             dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
                         }
                     }
@@ -522,6 +579,9 @@ static void render_single(Image &frame,
             }
         }
     }
+
+    // Repair seam artifacts
+    repair_seam(frame);
 }
 
 static bool is_water_pixel(const unsigned char *p) {
@@ -548,6 +608,43 @@ static bool is_water_pixel(const unsigned char *p) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// Count land/water ratio from the original Mollweide map (source image)
+// This is more accurate than counting from the rendered 3D view.
+// ---------------------------------------------------------------------------
+static void count_land_water_original(const Image &src,
+                                       double cx, double cy, double rx, double ry,
+                                       double &land_pct, double &water_pct) {
+    long long total_pixels = 0;
+    long long land_pixels = 0;
+
+    // Iterate over all pixels in the source image
+    for (int y = 0; y < src.h; ++y) {
+        for (int x = 0; x < src.w; ++x) {
+            // Check if pixel is within the map ellipse
+            double nx = (x - cx) / rx;
+            double ny = (y - cy) / ry;
+            if (nx * nx + ny * ny > 1.0) continue; // outside map
+
+            auto p = src.pix(x, y);
+            int maxc = std::max({p[0], p[1], p[2]});
+            if (maxc < 3) continue; // black background inside ellipse? skip
+
+            total_pixels++;
+            if (!is_water_pixel(p)) {
+                land_pixels++;
+            }
+        }
+    }
+
+    if (total_pixels > 0) {
+        land_pct = 100.0 * land_pixels / total_pixels;
+        water_pct = 100.0 * (total_pixels - land_pixels) / total_pixels;
+    } else {
+        land_pct = 0;
+        water_pct = 0;
+    }
+}
 
 // ---------------------------------------------------------------------------
 static void render_compare(Image &frame,
@@ -555,12 +652,9 @@ static void render_compare(Image &frame,
                             double lat0,
                             const Image &ell, double ecx, double ecy,
                             double rx, double ry,
-
                             double &land_pct, double &water_pct) {
     int w = frame.w, h = frame.h;
     int half_w = w / 2;
-    long long total_pixels = 0;
-    long long land_pixels = 0;
     // Left half: lon0 = 0 — precompute rotation matrix
     double Xx_l = -sin(0.0), Xy_l = 0, Xz_l = cos(0.0);
     double Yx_l = -sin(lat0) * cos(0.0), Yy_l = cos(lat0), Yz_l = -sin(lat0) * sin(0.0);
@@ -588,8 +682,6 @@ static void render_compare(Image &frame,
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 unsigned char pix[3] = {r, g, b};
                 bool water = is_water_pixel(pix);
-                total_pixels++;
-                if (!water) land_pixels++;
                 if (purple_mode) apply_purple_glow(r, g, b, water);
                 frame.set_pixel(px, py, r, g, b);
             }
@@ -624,8 +716,6 @@ static void render_compare(Image &frame,
             if (sample_ellipse(ell, ecx, ecy, rx, ry, mx, my, r, g, b)) {
                 unsigned char pix[3] = {r, g, b};
                 bool water = is_water_pixel(pix);
-                total_pixels++;
-                if (!water) land_pixels++;
                 if (purple_mode) apply_purple_glow(r, g, b, water);
                 frame.set_pixel(px, py, r, g, b);
             }
@@ -639,18 +729,50 @@ static void render_compare(Image &frame,
         p[0] = 255; p[1] = 255; p[2] = 255;
     }
 
-    if (total_pixels > 0) {
-        land_pct = 100.0 * land_pixels / total_pixels;
-        water_pct = 100.0 * (total_pixels - land_pixels) / total_pixels;
-    } else {
-        land_pct = 0;
-        water_pct = 0;
-    }
+    // Post-processing: repair seam artifacts
+    repair_seam(frame);
+
+    // land_pct and water_pct are now set by count_land_water_original() before calling this function
+    // They remain unchanged from the caller-provided values.
 }
 
 // ---------------------------------------------------------------------------
-// Draw text on image (simple pixel-based rendering)
+// Post-processing: repair seam artifacts (isolated dark pixels surrounded by
+// non-dark pixels). These occur at the 180° meridian where the texture edge
+// may have dark pixels due to the source ellipse boundary.
 // ---------------------------------------------------------------------------
+static void repair_seam(Image &frame) {
+    int w = frame.w, h = frame.h;
+    for (int py = 1; py < h - 1; ++py) {
+        for (int px = 1; px < w - 1; ++px) {
+            auto dp = frame.pix(px, py);
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc < 25) {
+                int bright_neighbors = 0;
+                int avg_r = 0, avg_g = 0, avg_b = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        auto np = frame.pix(px + dx, py + dy);
+                        int np_maxc = std::max({np[0], np[1], np[2]});
+                        if (np_maxc > 25) {
+                            bright_neighbors++;
+                            avg_r += np[0];
+                            avg_g += np[1];
+                            avg_b += np[2];
+                        }
+                    }
+                }
+                if (bright_neighbors >= 3) {
+                    dp[0] = avg_r / bright_neighbors;
+                    dp[1] = avg_g / bright_neighbors;
+                    dp[2] = avg_b / bright_neighbors;
+                }
+            }
+        }
+    }
+}
+
 // 8x8 bitmap font (ASCII 32-127)
 // 8x8 bitmap font for ASCII 32-127 (index 0 = space)
 static const unsigned char font8x8[96][8] = {
@@ -976,6 +1098,10 @@ static int mode_compare(const char *input_file, double lat0,
     generate_stars(frame, FW, FH, 42);
 
     double land_pct, water_pct;
+
+    // Count land/water from the original map (accurate)
+    count_land_water_original(src, cx, cy, rx, ry, land_pct, water_pct);
+
     render_compare(frame, ECX, ECY, ER, lat0,
                     ell, ecx, ecy, rx, ry,
                     land_pct, water_pct);
@@ -1259,6 +1385,11 @@ static int mode_video(const char *input_video, const char *output_video,
 
         // Render compare view
         double land_pct, water_pct;
+
+        // Count land/water from the original first frame (accurate)
+        // Use the ellipse parameters detected from the first frame
+        count_land_water_original(first_frame, cx, cy, rx, ry, land_pct, water_pct);
+
         render_compare(frame_out, ECX, ECY, ER, lat0,
                         frame_ell, ecx, ecy, rx, ry,
                         land_pct, water_pct);

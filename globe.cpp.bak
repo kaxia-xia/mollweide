@@ -178,54 +178,29 @@ static void apply_purple_glow(unsigned char &r, unsigned char &g, unsigned char 
 // ---------------------------------------------------------------------------
 // Sample from ellipse texture
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Improved ellipse sampling with seamless horizontal wrapping
-// Samples from both sides near the ±180° meridian and blends for smooth transition
-// ---------------------------------------------------------------------------
 static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double rx, double ry,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
     if (mx * mx + my * my > 1.0 + 1e-6) return false;
-
-    // Normalize mx to [-1, 1] range with wrapping
+    // Wrap mx: sample from the opposite side when near the edge.
+    // The Mollweide projection wraps horizontally (lon=-180 = lon=180).
     double wmx = mx;
-    while (wmx > 1.0) wmx -= 2.0;
-    while (wmx < -1.0) wmx += 2.0;
-
-    // Primary sample
+    if (wmx > 1.0) wmx = wmx - 2.0;
+    else if (wmx < -1.0) wmx = wmx + 2.0;
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
-
-    // If sampled pixel is black/dark (edge of extracted texture), try the wrapped side
-    if (r < 8 && g < 8 && b < 8) {
+    // If the sampled pixel is black (edge of extracted texture), try the other side.
+    if (r < 4 && g < 4 && b < 4) {
         double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
         double ex2 = ecx + wmx2 * rx;
-        unsigned char r2 = 0, g2 = 0, b2 = 0;
-        sample_bilinear(ell, ex2, ey, r2, g2, b2);
-        if (r2 > 8 || g2 > 8 || b2 > 8) {
-            r = r2; g = g2; b = b2;
-        }
-    }
-
-    // Near the ±180° meridian (|mx| > 0.92), blend with the wrapped side
-    // to ensure seamless transition at the date line
-    double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.92) / 0.08);
-    if (wrap_blend > 0.0) {
-        double wmx2 = (wmx > 0.0) ? wmx - 2.0 : wmx + 2.0;
-        double ex2 = ecx + wmx2 * rx;
-        unsigned char r2 = 0, g2 = 0, b2 = 0;
-        sample_bilinear(ell, ex2, ey, r2, g2, b2);
-        // Only blend if the wrapped sample is valid (not black)
-        if (r2 > 8 || g2 > 8 || b2 > 8) {
-            r = (unsigned char)(r * (1.0 - wrap_blend) + r2 * wrap_blend);
-            g = (unsigned char)(g * (1.0 - wrap_blend) + g2 * wrap_blend);
-            b = (unsigned char)(b * (1.0 - wrap_blend) + b2 * wrap_blend);
-        }
+        sample_bilinear(ell, ex2, ey, r, g, b);
     }
     return true;
 }
+
+    // If still black, try the other side
 
 // Find the map ellipse in the source image
 // ---------------------------------------------------------------------------
@@ -340,29 +315,6 @@ static void extract_ellipse(const Image &src,
             for (int ex = last + 1; ex < ew; ++ex) {
                 auto dp = ell.pix(ex, ey);
                 dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
-            }
-        }
-    }
-
-    // Second pass: for any remaining black pixels inside the ellipse (near edges),
-    // fill by wrapping horizontally: sample from the opposite side of the ellipse.
-    // This is critical for seamless rendering at the 180deg meridian.
-    for (int ey = 0; ey < eh; ++ey) {
-        for (int ex = 0; ex < ew; ++ex) {
-            auto dp = ell.pix(ex, ey);
-            if (dp[0] == 0 && dp[1] == 0 && dp[2] == 0) {
-                double nx = (ex - ecx) / rx;
-                double ny = (ey - ecy) / ry;
-                if (nx * nx + ny * ny <= 1.0) {
-                    double wrapped_nx = (nx > 0.0) ? nx - 2.0 : nx + 2.0;
-                    double wrapped_ex = ecx + wrapped_nx * rx;
-                    if (wrapped_ex >= 0 && wrapped_ex < ew) {
-                        auto sp = ell.pix((int)wrapped_ex, ey);
-                        if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
-                            dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
-                        }
-                    }
-                }
             }
         }
     }
@@ -1187,13 +1139,8 @@ static int mode_video(const char *input_video, const char *output_video,
     Image frame_src;
     frame_src.create(vw, vh);
     Image frame_ell;
-    Image frame_ell_prev;  // previous frame's ellipse texture (for motion-compensated修复)
-    bool has_prev_ell = false;
     Image frame_out;
     frame_out.create(FW, FH);
-    Image frame_out_prev;  // previous frame's output (for image-space seam修复)
-    frame_out_prev.create(FW, FH);
-    bool has_prev_frame_out = false;
 
     size_t frame_size_src = (size_t)vw * vh * 3;
     size_t frame_size_out = (size_t)FW * FH * 3;
@@ -1214,43 +1161,6 @@ static int mode_video(const char *input_video, const char *output_video,
         // Extract ellipse texture from this frame
         extract_ellipse(frame_src, cx, cy, rx, ry, frame_ell, ecx, ecy);
 
-        // --- Motion-compensated修复: 利用前一帧的纹理修复当前帧的180°经线断层 ---
-        // 原理: 对于当前帧纹理中mx接近±1(即180°经线附近)的像素,
-        // 从前一帧纹理中采样同一经纬度的值,因为前一帧中该位置可能不在断层区域
-        if (has_prev_ell) {
-            int ew = frame_ell.w;
-            int eh = frame_ell.h;
-            for (int ey = 0; ey < eh; ++ey) {
-                for (int ex = 0; ex < ew; ++ex) {
-                    double nx = (ex - ecx) / rx;
-                    double ny = (ey - ecy) / ry;
-                    if (nx * nx + ny * ny > 1.0) continue;
-                    
-                    // Check if this pixel is near the ±180° meridian (mx near ±1)
-                    // In the ellipse texture, the left/right edges correspond to mx=±1
-                    // Pixels near the horizontal edges of the ellipse are prone to seams
-                    double dist_to_edge = 1.0 - std::abs(nx);
-                    if (dist_to_edge < 0.04) {  // Within 4% of the edge
-                        auto dp = frame_ell.pix(ex, ey);
-                        // If the pixel is suspiciously dark (possible seam artifact)
-                        if (dp[0] < 10 && dp[1] < 10 && dp[2] < 10) {
-                            // Sample from previous frame's texture at the same (nx, ny)
-                            double prev_ex = ecx + nx * rx;
-                            double prev_ey = ecy + ny * ry;
-                            unsigned char pr = 0, pg = 0, pb = 0;
-                            sample_bilinear(frame_ell_prev, prev_ex, prev_ey, pr, pg, pb);
-                            if (pr > 10 || pg > 10 || pb > 10) {
-                                dp[0] = pr; dp[1] = pg; dp[2] = pb;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Save current ellipse as previous for next frame
-        frame_ell_prev = frame_ell;
-        has_prev_ell = true;
-
         // Clear output frame
         memset(frame_out.data.data(), 0, frame_size_out);
 
@@ -1262,42 +1172,6 @@ static int mode_video(const char *input_video, const char *output_video,
         render_compare(frame_out, ECX, ECY, ER, lat0,
                         frame_ell, ecx, ecy, rx, ry,
                         land_pct, water_pct);
-
-        // --- 图像空间后处理: 修复180°视角中的经线断层 ---
-        // 在右半部分(180°视角)中,球体中央竖线附近(180°经线)可能出现接缝
-        // 利用前一帧的渲染结果来修复: 对于同一地理位置,前一帧的像素可能不在断层区域
-        if (has_prev_frame_out) {
-            int seam_x_start = FW/2 + (int)(ECX + FW/4 - ER * 0.08);  // 180°经线左侧
-            int seam_x_end   = FW/2 + (int)(ECX + FW/4 + ER * 0.08);  // 180°经线右侧
-            for (int py = 0; py < FH; ++py) {
-                for (int px = seam_x_start; px <= seam_x_end; ++px) {
-                    auto dp = frame_out.pix(px, py);
-                    // Detect seam: unusually dark vertical line in the middle of the earth
-                    if (dp[0] < 15 && dp[1] < 15 && dp[2] < 15) {
-                        // Check neighbors to confirm this is a seam (not space background)
-                        int neighbor_count = 0;
-                        if (px > 0) {
-                            auto np = frame_out.pix(px-1, py);
-                            if (np[0] > 15 || np[1] > 15 || np[2] > 15) neighbor_count++;
-                        }
-                        if (px < FW-1) {
-                            auto np = frame_out.pix(px+1, py);
-                            if (np[0] > 15 || np[1] > 15 || np[2] > 15) neighbor_count++;
-                        }
-                        if (neighbor_count >= 1) {
-                            // This is a seam pixel, repair from previous frame
-                            auto prev_p = frame_out_prev.pix(px, py);
-                            if (prev_p[0] > 15 || prev_p[1] > 15 || prev_p[2] > 15) {
-                                dp[0] = prev_p[0]; dp[1] = prev_p[1]; dp[2] = prev_p[2];
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Save current frame output as previous for next frame
-        memcpy(frame_out_prev.data.data(), frame_out.data.data(), frame_size_out);
-        has_prev_frame_out = true;
 
         // Draw labels
         draw_text(frame_out, 10, 10, "0", 255, 255, 255);

@@ -1058,10 +1058,16 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
             "%s 2>/dev/null",
             out_dir, output_video);
         int ret = system(vcmd);
-        if (ret == 0)
+        if (ret == 0) {
             printf("视频已保存: %s\n", output_video);
-        else
+            // 自动清理临时帧目录
+            char rmcmd[512];
+            snprintf(rmcmd, sizeof(rmcmd), "rm -rf %s", out_dir);
+            system(rmcmd);
+            printf("已清理临时帧目录: %s\n", out_dir);
+        } else {
             fprintf(stderr, "视频合成失败 (ffmpeg返回 %d = %d>>8)\n", ret, ret>>8);
+        }
     }
 
     return 0;

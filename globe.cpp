@@ -402,11 +402,11 @@ static void extract_ellipse(const Image &src,
         }
     }
 
-    // Third pass: fix dark pixels at the left/right edges of the ellipse content.
-    // The source image has anti-aliased boundary pixels that are darker than
-    // the actual map content. These cause a dark line at the 180° meridian.
-    // Replace the first 3 pixels using data from 3 pixels inside the opposite edge,
-    // and vice versa, to avoid copying from also-dark edge pixels.
+    // Third pass: fix dark/anti-aliased pixels at the left/right edges of the ellipse.
+    // Only repair pixels that are suspiciously dark (likely anti-aliasing artifacts
+    // at the ellipse boundary), by sampling from slightly further inside the SAME side.
+    // Do NOT cross-replace between left and right edges, as that would break maps
+    // where the 180° meridian passes through continents (e.g. Rodinia supercontinent).
     for (int ey = 0; ey < eh; ++ey) {
         int first = -1, last = -1;
         for (int ex = 0; ex < ew; ++ex) {
@@ -418,27 +418,34 @@ static void extract_ellipse(const Image &src,
         }
         if (first < 0 || last - first < 6) continue;
         
-        // Replace first 3 pixels using data from (last-2, last-1, last)
-        // which are on the opposite side but away from the right edge
+        // Fix dark pixels at left edge by sampling from further right on same side
         for (int i = 0; i < 3 && first + i < ew; ++i) {
-            int src_ex = last - 2 + i;
-            if (src_ex >= 0 && src_ex < ew) {
-                auto sp = ell.pix(src_ex, ey);
-                if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
-                    auto dp = ell.pix(first + i, ey);
-                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            auto dp = ell.pix(first + i, ey);
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc < 25) {
+                // Sample from 4 pixels further inside (same side)
+                int src_ex = first + i + 4;
+                if (src_ex < ew) {
+                    auto sp = ell.pix(src_ex, ey);
+                    int sp_max = std::max({sp[0], sp[1], sp[2]});
+                    if (sp_max > 30) {
+                        dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                    }
                 }
             }
         }
-        // Replace last 3 pixels using data from (first, first+1, first+2)
-        // which are on the opposite side but away from the left edge
+        // Fix dark pixels at right edge by sampling from further left on same side
         for (int i = 0; i < 3 && last - i >= 0; ++i) {
-            int src_ex = first + i;
-            if (src_ex >= 0 && src_ex < ew) {
-                auto sp = ell.pix(src_ex, ey);
-                if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
-                    auto dp = ell.pix(last - i, ey);
-                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            auto dp = ell.pix(last - i, ey);
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc < 25) {
+                int src_ex = last - i - 4;
+                if (src_ex >= 0) {
+                    auto sp = ell.pix(src_ex, ey);
+                    int sp_max = std::max({sp[0], sp[1], sp[2]});
+                    if (sp_max > 30) {
+                        dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                    }
                 }
             }
         }
@@ -992,7 +999,7 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
     printf("=== 生成旋转地球视频帧 ===\n");
     printf("输入: %s\n", input_file);
     printf("帧数: %d\n", num_frames);
-    printf("纬度: %.1f\n", -lat0 * 180 / PI);
+    printf("纬度: %.1f\n", lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
 
@@ -1111,7 +1118,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
                         const char *out_dir) {
     printf("=== 生成单张地球图片 ===\n");
     printf("输入: %s\n", input_file);
-    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, -lat0 * 180 / PI);
+    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
 
@@ -1149,7 +1156,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
 
     char fn[256];
     int lon_deg = (int)round(lon0 * 180 / PI);
-    int lat_deg = (int)round(-lat0 * 180 / PI);
+    int lat_deg = (int)round(lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/lon_%+03d_lat_%+03d.png", out_dir, lon_deg, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -1164,7 +1171,7 @@ static int mode_compare(const char *input_file, double lat0,
                          const char *out_dir) {
     printf("=== 生成双视角对比图 ===\n");
     printf("输入: %s\n", input_file);
-    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
     printf("输出目录: %s\n\n", out_dir);
 
@@ -1266,7 +1273,7 @@ static int mode_compare(const char *input_file, double lat0,
     }
 
     char fn[256];
-    int lat_deg = (int)round(-lat0 * 180 / PI);
+    int lat_deg = (int)round(lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/compare_%+03d.png", out_dir, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -1285,7 +1292,7 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("=== 处理视频 (流式) ===\n");
     printf("输入视频: %s\n", input_video);
     printf("输出视频: %s\n", output_video);
-    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n\n");
 
     // Step 1: Probe video to get frame count and dimensions
@@ -1623,7 +1630,7 @@ int main(int argc, char **argv) {
                 purple_mode = true;
 
             else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
-                lat0 = -atof(argv[++i]) * PI / 180.0;
+                lat0 = atof(argv[++i]) * PI / 180.0;
             else if (i == argc - 1 && argv[i][0] != '-')
                 out_dir = argv[i];
         }
@@ -1650,8 +1657,8 @@ int main(int argc, char **argv) {
         num_frames = atoi(argv[pos]) * 360;
         pos++;
     }
-    if (pos < argc && argv[pos][0] != '-') {
-        lat0 = -atof(argv[pos]) * PI / 180.0;
+    if (pos < argc && (argv[pos][0] != '-' || (argv[pos][0] == '-' && argv[pos][1] >= '0' && argv[pos][1] <= '9'))) {
+        lat0 = atof(argv[pos]) * PI / 180.0;
         pos++;
     }
     if (pos < argc && argv[pos][0] != '-') {
@@ -1668,10 +1675,10 @@ int main(int argc, char **argv) {
             single_mode = true;
             single_lon = atof(argv[++i]) * PI / 180.0;
         } else if (strcmp(argv[i], "--lat") == 0 && i + 1 < argc)
-            single_lat = -atof(argv[++i]) * PI / 180.0;
+            single_lat = atof(argv[++i]) * PI / 180.0;
         else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             compare_mode = true;
-            compare_lat = -atof(argv[++i]) * PI / 180.0;
+            compare_lat = atof(argv[++i]) * PI / 180.0;
         } else if (strcmp(argv[i], "--purple") == 0)
             purple_mode = true;
     }

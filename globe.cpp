@@ -6,6 +6,17 @@
 //   2. 指定经度/纬度输出单张图片
 //   3. 生成 0°/180° 双视角对比图（带陆地/海洋比例）
 //   4. 处理视频（逐帧生成对比图再合成新视频）
+//   5. 旅程模式：纬度渐变+经度变化（南回归线→赤道→北回归线）
+//
+// 缩小椭圆0.966
+// ============================================================================
+// globe.cpp — 地球旋转视频帧生成器
+//
+// 功能：
+//   1. 生成旋转地球视频帧
+//   2. 指定经度/纬度输出单张图片
+//   3. 生成 0°/180° 双视角对比图（带陆地/海洋比例）
+//   4. 处理视频（逐帧生成对比图再合成新视频）
 //
 // 缩小椭圆0.966
 // ============================================================================
@@ -998,7 +1009,7 @@ static void draw_text(Image &img, int x, int y, const char *text,
 // ---------------------------------------------------------------------------
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "用法: %s <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度]\n"
+        "用法: %s <输入图片> [圈数] [纬度] [输出目录] [-o 视频文件] [-f] [--lon 经度] [--compare 纬度] [--video 视频文件] [--vl 纬度] [--journey 图片] [帧数]\n"
         "\n"
         "位置参数:\n"
         "  输入图片         摩尔维特投影的世界地图图片\n"
@@ -1013,9 +1024,15 @@ static void print_usage(const char *prog) {
         "  --lat 纬度       指定视角纬度，与 --lon 配合使用\n"
         "  --compare 纬度   生成0°和180°并排对比图，参数为观察纬度\n"
         "  --video 视频文件 输入视频文件，逐帧处理为对比图再合成新视频\n"
-        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n  --purple         紫色辉光奇幻模式，大陆发出紫色辉光，海洋变为暗紫色\n",
+        "  --vl 纬度        配合 --video 使用，指定观察纬度（默认0）\n"
+        "  --journey 图片   旅程模式：纬度渐变+经度变化\n"
+        "                    前半段: 南回归线(-23.5°)→赤道(0°), 180°→0°\n"
+        "                    后半段: 赤道(0°)→北回归线(+23.5°), 0°→180°\n"
+        "                    可选参数: 总帧数(默认360)\n"
+        "  --purple         紫色辉光奇幻模式，大陆发出紫色辉光，海洋变为暗紫色\n",
         prog);
 }
+
 
 // ---------------------------------------------------------------------------
 // Mode 1: Generate rotation video frames
@@ -1632,6 +1649,178 @@ static int mode_video(const char *input_video, const char *output_video,
     return enc_ret == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// Mode 5: Journey mode — latitude gradient + longitude change
+// ---------------------------------------------------------------------------
+// Mode 5: Journey mode — latitude gradient + longitude change
+//   First half:  lat from -23.5° (Tropic of Capricorn) to 0° (Equator)
+//                lon from 180° westward to 0°
+//   Second half: lat from 0° (Equator) to +23.5° (Tropic of Cancer)
+//                lon from 0° eastward to 180°
+// ---------------------------------------------------------------------------
+static int mode_journey(const char *input_file, int total_frames,
+                         const char *out_dir, const char *output_video, bool frames_only) {
+    printf("=== 旅程模式 ===\n");
+    printf("输入: %s\n", input_file);
+    printf("总帧数: %d\n", total_frames);
+    printf("输出目录: %s\n\n", out_dir);
+    if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", out_dir);
+    system(cmd);
+
+    Image src;
+    if (!src.load(input_file)) {
+        fprintf(stderr, "无法加载: %s\n", input_file);
+        return 1;
+    }
+    printf("输入图片: %d x %d\n", src.w, src.h);
+
+    double cx, cy, rx, ry;
+    if (!find_ellipse(src, cx, cy, rx, ry)) {
+        fprintf(stderr, "无法找到椭圆!\n");
+        return 1;
+    }
+
+    Image ell;
+    double ecx, ecy;
+    extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+    const int FW = 1920, FH = 1080;
+    const double ER = 420.0;
+    const double ECX = FW / 2.0;
+    const double ECY = FH / 2.0;
+
+    printf("\n输出: %dx%d, 地球半径=%.0fpx\n\n", FW, FH, ER);
+
+    // Count land/water from the original map (accurate, done once)
+    double land_pct, water_pct;
+    count_land_water_original(src, cx, cy, rx, ry, land_pct, water_pct);
+    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
+
+    // Pre-allocate frame buffer (reuse for all frames)
+    Image frame;
+    frame.create(FW, FH, 0, 0, 0);
+
+    int half_frames = total_frames / 2;
+
+    for (int f = 0; f < total_frames; ++f) {
+        double lat0, lon0;
+        const char *phase_label;
+
+        if (f < half_frames) {
+            // First half: Tropic of Capricorn (-23.5°) → Equator (0°)
+            //             Longitude 180° → 0° (westward)
+            double t = (double)f / half_frames;  // 0.0 → 1.0
+            lat0 = (-23.5 + t * 23.5) * PI / 180.0;  // -23.5° → 0°
+            lon0 = (180.0 - t * 180.0) * PI / 180.0;  // 180° → 0°
+            phase_label = "Capricorn->Equator";
+        } else {
+            // Second half: Equator (0°) → Tropic of Cancer (+23.5°)
+            //              Longitude 0° → 180° (eastward)
+            double t = (double)(f - half_frames) / (total_frames - half_frames);  // 0.0 → 1.0
+            lat0 = (t * 23.5) * PI / 180.0;  // 0° → +23.5°
+            lon0 = (t * 180.0) * PI / 180.0;  // 0° → 180°
+            phase_label = "Equator->Cancer";
+        }
+
+        // Clear frame to black (reuse buffer)
+        memset(frame.data.data(), 0, frame.data.size());
+
+        generate_stars(frame, FW, FH, 42 + f);
+        render_frame(frame, ECX, ECY, ER, lon0, lat0,
+                      ell, ecx, ecy, rx, ry);
+
+        // Draw info text on frame
+        int lat_deg = (int)round(lat0 * 180 / PI);  // positive = north, negative = south
+        int lon_deg = (int)round(lon0 * 180 / PI);
+
+        // Phase label (top-left)
+        draw_text(frame, 20, 20, phase_label, 200, 200, 255);
+
+        // Latitude/Longitude info (top-right)
+        char coord_text[64];
+        snprintf(coord_text, sizeof(coord_text), "Lat: %+d  Lon: %d", lat_deg, lon_deg);
+        int coord_x = FW - (int)strlen(coord_text) * 9 - 20;
+        draw_text(frame, coord_x, 20, coord_text, 255, 255, 100);
+
+        // Land/Water percentage (bottom-left)
+        char info_text[64];
+        snprintf(info_text, sizeof(info_text), "Land: %.1f%%  Water: %.1f%%", land_pct, water_pct);
+        unsigned char tr = 255, tg = 255, tb = 255;
+        if (purple_mode) { tr = 200; tg = 100; tb = 255; }
+        int text_x = 20;
+        int text_y = FH - 40;
+        for (int ci = 0; info_text[ci]; ++ci) {
+            int cx2 = text_x + ci * 27;
+            unsigned char ch = (unsigned char)info_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame.set_pixel(cx2 + col*3 + dx, text_y + row*3 + dy, tr, tg, tb);
+                    }
+                }
+            }
+        }
+
+        // Progress bar (bottom)
+        int bar_x = 20;
+        int bar_y = FH - 15;
+        int bar_w = FW - 40;
+        int bar_h = 8;
+        int filled = (int)(bar_w * (f + 1) / total_frames);
+        for (int by = 0; by < bar_h; ++by) {
+            for (int bx = 0; bx < bar_w; ++bx) {
+                unsigned char cr = 40, cg = 40, cb = 40;
+                if (bx < filled) { cr = 100; cg = 200; cb = 255; }
+                frame.set_pixel(bar_x + bx, bar_y + by, cr, cg, cb);
+            }
+        }
+
+        char fn[256];
+        snprintf(fn, sizeof(fn), "%s/frame_%04d.png", out_dir, f);
+        frame.save_png(fn);
+
+        // Progress indicator
+        if ((f + 1) % 10 == 0 || f == 0 || f == total_frames - 1) {
+            printf("  帧 %4d/%d (%.0f%%) [%s] Lat=%+d Lon=%d\n",
+                   f + 1, total_frames, 100.0 * (f + 1) / total_frames,
+                   phase_label, lat_deg, lon_deg);
+        }
+    }
+    printf("\n完成! 共 %d 帧 -> %s/\n", total_frames, out_dir);
+    printf("\n完成! 共 %d 帧 -> %s/\n", total_frames, out_dir);
+    printf("\n完成! 共 %d 帧 -> %s/\n", total_frames, out_dir);
+
+    if (!frames_only && output_video) {
+        printf("合成视频: %s\n", output_video);
+        char vcmd[1024];
+        snprintf(vcmd, sizeof(vcmd),
+            "ffmpeg -y -framerate 30 -i %s/frame_%%04d.png "
+            "-c:v libx264 -pix_fmt yuv420p -crf 23 "
+            "%s 2>/dev/null",
+            out_dir, output_video);
+        int ret = system(vcmd);
+        if (ret == 0) {
+            printf("视频已保存: %s\n", output_video);
+            // 自动清理临时帧目录
+            char rmcmd[512];
+            snprintf(rmcmd, sizeof(rmcmd), "rm -rf %s", out_dir);
+            system(rmcmd);
+            printf("已清理临时帧目录: %s\n", out_dir);
+        } else {
+            fprintf(stderr, "视频合成失败 (ffmpeg返回 %d = %d>>8)\n", ret, ret>>8);
+        }
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         print_usage(argv[0]);
@@ -1654,7 +1843,6 @@ int main(int argc, char **argv) {
                 output_video = argv[++i];
             else if (strcmp(argv[i], "--purple") == 0)
                 purple_mode = true;
-
             else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
                 lat0 = -atof(argv[++i]) * PI / 180.0;
             else if (i == argc - 1 && argv[i][0] != '-')
@@ -1662,6 +1850,32 @@ int main(int argc, char **argv) {
         }
 
         return mode_video(input_video, output_video, lat0, out_dir);
+    }
+
+    // Check for --journey mode
+    if (strcmp(argv[1], "--journey") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "错误: --journey 需要指定输入图片\n");
+            return 1;
+        }
+        const char *input_file = argv[2];
+        int total_frames = 360;  // default: 12 seconds @ 30fps
+        const char *out_dir = "frames";
+        const char *output_video = "journey.mp4";
+        bool frames_only = false;
+
+        for (int i = 3; i < argc; ++i) {
+            if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+                output_video = argv[++i];
+            else if (strcmp(argv[i], "-f") == 0)
+                frames_only = true;
+            else if (strcmp(argv[i], "--purple") == 0)
+                purple_mode = true;
+            else if (argv[i][0] != '-')
+                total_frames = atoi(argv[i]);
+        }
+
+        return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
     }
 
     // Normal mode

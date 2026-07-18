@@ -499,7 +499,7 @@ static void extract_ellipse(const Image &src,
         }
     }
 
-    printf("  Ellipse image: %d x %d\n", ew, eh);
+    // printf("  Ellipse image: %d x %d\n", ew, eh);
 }
 
 // ---------------------------------------------------------------------------
@@ -2142,7 +2142,33 @@ int main(int argc, char **argv) {
         size_t nread = fread(raw_buf.data(), 1, frame_size, stdin);
         if (nread != frame_size) {
             fprintf(stderr, "读取帧数据不完整: %zu / %zu\n", nread, frame_size);
-            return 1;
+        // Create image from raw data
+        Image src;
+        src.w = rw;
+        src.h = rh;
+        src.data.assign(raw_buf.begin(), raw_buf.end());
+
+        // Extract ellipse texture (redirect stdout to avoid polluting pipe)
+        // Save stdout, redirect to stderr temporarily
+        FILE *old_stdout = stdout;
+        stdout = stderr;
+        Image ell;
+        double ecx, ecy;
+        extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+        stdout = old_stdout;
+
+        // Render frame
+        const int FW = 1920, FH = 1080;
+        const double ER = 420.0;
+        const double ECX = FW / 2.0;
+        const double ECY = FH / 2.0;
+
+        Image frame;
+        frame.create(FW, FH, 0, 0, 0);
+        generate_stars(frame, FW, FH, 42 + (int)(lon0 * 100));
+        render_frame(frame, ECX, ECY, ER, lon0, lat0, ell, ecx, ecy, rx, ry);
+
+        // Output raw RGB24 to stdout
         }
 
         // Create image from raw data

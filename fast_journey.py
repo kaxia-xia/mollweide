@@ -105,7 +105,22 @@ def main():
     
     # 用C++程序检测椭圆
     cwd = os.path.dirname(os.path.abspath(__file__))
+    # 用C++程序检测椭圆
+    cwd = os.path.dirname(os.path.abspath(__file__))
     globe_exe = os.path.join(cwd, 'build/globe')
+    
+    # 使用Popen替代run，加上preexec_fn
+    detect_proc = subprocess.Popen(
+        [globe_exe, first_frame_path, '-f', '--lon', '0', '--lat', '0'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd,
+        preexec_fn=lambda: os.setsid() if hasattr(os, 'setsid') else None
+    )
+    stdout, _ = detect_proc.communicate(timeout=30)
+    result_text = stdout.decode()
+    import re
+    ellipse_info = {}
+    for line in result_text.split('\n'):
+        m = re.search(r'center=\(([\d.]+),([\d.]+)\)', line)
     
     result = subprocess.run(
         [globe_exe, first_frame_path, '-f', '--lon', '0', '--lat', '0'],

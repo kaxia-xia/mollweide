@@ -196,7 +196,7 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
                             double rx, double ry,
                             double mx, double my,
                             unsigned char &r, unsigned char &g, unsigned char &b) {
-    if (mx * mx + my * my > 1.0 + 1e-6) return false;
+    if (mx * mx + my * my > 1.0 + 1e-5) return false;
 
     // Normalize mx to [-1, 1] range with wrapping
     double wmx = mx;
@@ -207,19 +207,20 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     double wmx2 = (wmx >= 0.0) ? wmx - 2.0 : wmx + 2.0;
 
     // When |wmx| > 0.92, we are near the ±180° meridian (texture edge).
-    // The texture edge may have artifacts due to ellipse boundary extraction.
-    // In this region, blend between primary and wrapped samples to ensure
-    // a smooth transition across the 180° meridian.
-    // At |wmx| = 1.0, use 100% wrapped sample.
+    // Both primary and wrapped samples may be affected by dark boundary pixels.
+    // Use an inset sample (slightly inside the texture) for both and blend.
     double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.92) / 0.08);
 
-    // Primary sample
-    double ex = ecx + wmx * rx;
+    // Primary sample (with inset to avoid dark edge pixels)
+    double inset = 1.0 - 0.01 * wrap_blend;  // up to 1% inset at the edge
+    double wmx_inset = wmx * inset;
+    double ex = ecx + wmx_inset * rx;
     double ey = ecy + my * ry;
     sample_bilinear(ell, ex, ey, r, g, b);
 
-    // Wrapped sample
-    double ex2 = ecx + wmx2 * rx;
+    // Wrapped sample (also with inset)
+    double wmx2_inset = wmx2 * inset;
+    double ex2 = ecx + wmx2_inset * rx;
     unsigned char r2 = 0, g2 = 0, b2 = 0;
     sample_bilinear(ell, ex2, ey, r2, g2, b2);
 
@@ -243,16 +244,16 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
         return true;
     }
 
-    // If neither is valid, try sampling slightly inside the texture
-    double inset = 0.99;
-    double wmx_inset = wmx * inset;
-    double ex_inset = ecx + wmx_inset * rx;
-    sample_bilinear(ell, ex_inset, ey, r, g, b);
+    // If neither is valid, try sampling further inside
+    double inset2 = 0.98;
+    double wmx_inset2 = wmx * inset2;
+    double ex_inset2 = ecx + wmx_inset2 * rx;
+    sample_bilinear(ell, ex_inset2, ey, r, g, b);
     if (r > 8 || g > 8 || b > 8) return true;
 
-    double wmx2_inset = wmx2 * inset;
-    double ex2_inset = ecx + wmx2_inset * rx;
-    sample_bilinear(ell, ex2_inset, ey, r2, g2, b2);
+    double wmx2_inset2 = wmx2 * inset2;
+    double ex2_inset2 = ecx + wmx2_inset2 * rx;
+    sample_bilinear(ell, ex2_inset2, ey, r2, g2, b2);
     if (r2 > 8 || g2 > 8 || b2 > 8) {
         r = r2; g = g2; b = b2;
         return true;
@@ -344,7 +345,7 @@ static void extract_ellipse(const Image &src,
         for (int ex = 0; ex < ew; ++ex) {
             double nx = (ex - ecx) / rx;
             double ny = (ey - ecy) / ry;
-            if (nx * nx + ny * ny <= 1.0 + 1e-4) {
+            if (nx * nx + ny * ny <= 1.0 + 5e-3) {
                 unsigned char r, g, b;
                 sample_bilinear(src, cx + nx * rx, cy + ny * ry, r, g, b);
                 auto dp = ell.pix(ex, ey);
@@ -401,14 +402,55 @@ static void extract_ellipse(const Image &src,
         }
     }
 
-    // Third pass: for any remaining dark pixels inside the ellipse (near edges),
-    // fill by wrapping horizontally: sample from the opposite side of the ellipse.
-    // Only fill pixels that are nearly pure black (seam artifacts at the texture edge).
+    // Third pass: fix dark pixels at the left/right edges of the ellipse content.
+    // The source image has anti-aliased boundary pixels that are darker than
+    // the actual map content. These cause a dark line at the 180° meridian.
+    // Replace the first 3 pixels using data from 3 pixels inside the opposite edge,
+    // and vice versa, to avoid copying from also-dark edge pixels.
+    for (int ey = 0; ey < eh; ++ey) {
+        int first = -1, last = -1;
+        for (int ex = 0; ex < ew; ++ex) {
+            auto dp = ell.pix(ex, ey);
+            if (dp[0] != 0 || dp[1] != 0 || dp[2] != 0) {
+                if (first < 0) first = ex;
+                last = ex;
+            }
+        }
+        if (first < 0 || last - first < 6) continue;
+        
+        // Replace first 3 pixels using data from (last-2, last-1, last)
+        // which are on the opposite side but away from the right edge
+        for (int i = 0; i < 3 && first + i < ew; ++i) {
+            int src_ex = last - 2 + i;
+            if (src_ex >= 0 && src_ex < ew) {
+                auto sp = ell.pix(src_ex, ey);
+                if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
+                    auto dp = ell.pix(first + i, ey);
+                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                }
+            }
+        }
+        // Replace last 3 pixels using data from (first, first+1, first+2)
+        // which are on the opposite side but away from the left edge
+        for (int i = 0; i < 3 && last - i >= 0; ++i) {
+            int src_ex = first + i;
+            if (src_ex >= 0 && src_ex < ew) {
+                auto sp = ell.pix(src_ex, ey);
+                if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
+                    auto dp = ell.pix(last - i, ey);
+                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                }
+            }
+        }
+    }
+
+    // Fourth pass: for any remaining pure black pixels inside the ellipse,
+    // fill by wrapping horizontally.
     for (int ey = 0; ey < eh; ++ey) {
         for (int ex = 0; ex < ew; ++ex) {
             auto dp = ell.pix(ex, ey);
             int maxc = std::max({dp[0], dp[1], dp[2]});
-            if (maxc < 8) {  // Only fix nearly-black pixels
+            if (maxc < 8) {
                 double nx = (ex - ecx) / rx;
                 double ny = (ey - ecy) / ry;
                 if (nx * nx + ny * ny <= 1.0) {
@@ -626,7 +668,6 @@ static void render_single(Image &frame,
                     apply_purple_glow(r, g, b, is_water_pixel(pix));
                 }
                 frame.set_pixel(px, py, r, g, b);
-
             }
         }
     }

@@ -251,12 +251,21 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     sample_bilinear(ell, ex_inset2, ey, r, g, b);
     if (r > 8 || g > 8 || b > 8) return true;
 
-    double wmx2_inset2 = wmx2 * inset2;
-    double ex2_inset2 = ecx + wmx2_inset2 * rx;
-    sample_bilinear(ell, ex2_inset2, ey, r2, g2, b2);
-    if (r2 > 8 || g2 > 8 || b2 > 8) {
-        r = r2; g = g2; b = b2;
-        return true;
+    // Try even further inside (progressively deeper insets)
+    for (double d = 0.96; d >= 0.80; d -= 0.04) {
+        double wmx_inset3 = wmx * d;
+        double ex_inset3 = ecx + wmx_inset3 * rx;
+        sample_bilinear(ell, ex_inset3, ey, r, g, b);
+        if (r > 8 || g > 8 || b > 8) return true;
+        
+        // Also try wrapped with this inset
+        double wmx2_inset3 = wmx2 * d;
+        double ex2_inset3 = ecx + wmx2_inset3 * rx;
+        sample_bilinear(ell, ex2_inset3, ey, r2, g2, b2);
+        if (r2 > 8 || g2 > 8 || b2 > 8) {
+            r = r2; g = g2; b = b2;
+            return true;
+        }
     }
 
     return false;
@@ -332,7 +341,11 @@ static bool find_ellipse(const Image &img, double &cx, double &cy,
 static void extract_ellipse(const Image &src,
                              double cx, double cy, double rx, double ry,
                              Image &ell, double &ecx, double &ecy) {
-    int ew = (int)ceil(2 * rx) + 3;
+    // Make texture wider (4*rx) so that wrapped sampling (mx ± 2.0) stays in bounds.
+    // mx=-1..+1 maps to ex = ecx ± rx, and mx±2 maps to ex = ecx ± 3*rx.
+    // With ew=4*rx and ecx=ew/2, mx=±1 maps to ex=ecx±rx (within texture),
+    // and mx=±1 wrapped by ±2 maps to ex=ecx∓rx (also within texture).
+    int ew = (int)ceil(4 * rx) + 3;
     int eh = (int)ceil(2 * ry) + 3;
     if (ew % 2 == 0) ew++;
     if (eh % 2 == 0) eh++;
@@ -999,7 +1012,7 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
     printf("=== 生成旋转地球视频帧 ===\n");
     printf("输入: %s\n", input_file);
     printf("帧数: %d\n", num_frames);
-    printf("纬度: %.1f\n", lat0 * 180 / PI);
+    printf("纬度: %.1f\n", -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
 
@@ -1118,7 +1131,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
                         const char *out_dir) {
     printf("=== 生成单张地球图片 ===\n");
     printf("输入: %s\n", input_file);
-    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, lat0 * 180 / PI);
+    printf("经度: %.1f°, 纬度: %.1f°\n", lon0 * 180 / PI, -lat0 * 180 / PI);
     printf("输出目录: %s\n\n", out_dir);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
 
@@ -1156,7 +1169,7 @@ static int mode_single(const char *input_file, double lon0, double lat0,
 
     char fn[256];
     int lon_deg = (int)round(lon0 * 180 / PI);
-    int lat_deg = (int)round(lat0 * 180 / PI);
+    int lat_deg = (int)round(-lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/lon_%+03d_lat_%+03d.png", out_dir, lon_deg, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -1171,7 +1184,7 @@ static int mode_compare(const char *input_file, double lat0,
                          const char *out_dir) {
     printf("=== 生成双视角对比图 ===\n");
     printf("输入: %s\n", input_file);
-    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n");
     printf("输出目录: %s\n\n", out_dir);
 
@@ -1273,7 +1286,7 @@ static int mode_compare(const char *input_file, double lat0,
     }
 
     char fn[256];
-    int lat_deg = (int)round(lat0 * 180 / PI);
+    int lat_deg = (int)round(-lat0 * 180 / PI);
     snprintf(fn, sizeof(fn), "%s/compare_%+03d.png", out_dir, lat_deg);
     frame.save_png(fn);
     printf("已保存: %s\n", fn);
@@ -1292,7 +1305,7 @@ static int mode_video(const char *input_video, const char *output_video,
     printf("=== 处理视频 (流式) ===\n");
     printf("输入视频: %s\n", input_video);
     printf("输出视频: %s\n", output_video);
-    printf("观察纬度: %.1f°\n", lat0 * 180 / PI);
+    printf("观察纬度: %.1f°\n", -lat0 * 180 / PI);
     if (purple_mode) printf("模式: 紫色辉光奇幻模式\n\n");
 
     // Step 1: Probe video to get frame count and dimensions
@@ -1630,7 +1643,7 @@ int main(int argc, char **argv) {
                 purple_mode = true;
 
             else if (strcmp(argv[i], "--vl") == 0 && i + 1 < argc)
-                lat0 = atof(argv[++i]) * PI / 180.0;
+                lat0 = -atof(argv[++i]) * PI / 180.0;
             else if (i == argc - 1 && argv[i][0] != '-')
                 out_dir = argv[i];
         }
@@ -1658,7 +1671,7 @@ int main(int argc, char **argv) {
         pos++;
     }
     if (pos < argc && (argv[pos][0] != '-' || (argv[pos][0] == '-' && argv[pos][1] >= '0' && argv[pos][1] <= '9'))) {
-        lat0 = atof(argv[pos]) * PI / 180.0;
+        lat0 = -atof(argv[pos]) * PI / 180.0;
         pos++;
     }
     if (pos < argc && argv[pos][0] != '-') {
@@ -1675,10 +1688,10 @@ int main(int argc, char **argv) {
             single_mode = true;
             single_lon = atof(argv[++i]) * PI / 180.0;
         } else if (strcmp(argv[i], "--lat") == 0 && i + 1 < argc)
-            single_lat = atof(argv[++i]) * PI / 180.0;
+            single_lat = -atof(argv[++i]) * PI / 180.0;
         else if (strcmp(argv[i], "--compare") == 0 && i + 1 < argc) {
             compare_mode = true;
-            compare_lat = atof(argv[++i]) * PI / 180.0;
+            compare_lat = -atof(argv[++i]) * PI / 180.0;
         } else if (strcmp(argv[i], "--purple") == 0)
             purple_mode = true;
     }

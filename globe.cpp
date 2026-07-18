@@ -455,6 +455,43 @@ static void generate_stars(Image &frame, int w, int h, unsigned int seed) {
 }
 
 // ---------------------------------------------------------------------------
+// Post-processing: repair seam artifacts (isolated dark pixels surrounded by
+// non-dark pixels). These occur at the 180° meridian where the texture edge
+// may have dark pixels due to the source ellipse boundary.
+// ---------------------------------------------------------------------------
+static void repair_seam(Image &frame) {
+    int w = frame.w, h = frame.h;
+    for (int py = 1; py < h - 1; ++py) {
+        for (int px = 1; px < w - 1; ++px) {
+            auto dp = frame.pix(px, py);
+            int maxc = std::max({dp[0], dp[1], dp[2]});
+            if (maxc < 25) {
+                int bright_neighbors = 0;
+                int avg_r = 0, avg_g = 0, avg_b = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (dx == 0 && dy == 0) continue;
+                        auto np = frame.pix(px + dx, py + dy);
+                        int np_maxc = std::max({np[0], np[1], np[2]});
+                        if (np_maxc > 25) {
+                            bright_neighbors++;
+                            avg_r += np[0];
+                            avg_g += np[1];
+                            avg_b += np[2];
+                        }
+                    }
+                }
+                if (bright_neighbors >= 3) {
+                    dp[0] = avg_r / bright_neighbors;
+                    dp[1] = avg_g / bright_neighbors;
+                    dp[2] = avg_b / bright_neighbors;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Render a single 3D earth frame
 // ---------------------------------------------------------------------------
 static void render_frame(Image &frame,
@@ -526,6 +563,9 @@ static void render_frame(Image &frame,
             }
         }
     }
+
+    // Repair seam artifacts
+    repair_seam(frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -737,41 +777,6 @@ static void render_compare(Image &frame,
 }
 
 // ---------------------------------------------------------------------------
-// Post-processing: repair seam artifacts (isolated dark pixels surrounded by
-// non-dark pixels). These occur at the 180° meridian where the texture edge
-// may have dark pixels due to the source ellipse boundary.
-// ---------------------------------------------------------------------------
-static void repair_seam(Image &frame) {
-    int w = frame.w, h = frame.h;
-    for (int py = 1; py < h - 1; ++py) {
-        for (int px = 1; px < w - 1; ++px) {
-            auto dp = frame.pix(px, py);
-            int maxc = std::max({dp[0], dp[1], dp[2]});
-            if (maxc < 25) {
-                int bright_neighbors = 0;
-                int avg_r = 0, avg_g = 0, avg_b = 0;
-                for (int dy = -1; dy <= 1; ++dy) {
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        if (dx == 0 && dy == 0) continue;
-                        auto np = frame.pix(px + dx, py + dy);
-                        int np_maxc = std::max({np[0], np[1], np[2]});
-                        if (np_maxc > 25) {
-                            bright_neighbors++;
-                            avg_r += np[0];
-                            avg_g += np[1];
-                            avg_b += np[2];
-                        }
-                    }
-                }
-                if (bright_neighbors >= 3) {
-                    dp[0] = avg_r / bright_neighbors;
-                    dp[1] = avg_g / bright_neighbors;
-                    dp[2] = avg_b / bright_neighbors;
-                }
-            }
-        }
-    }
-}
 
 // 8x8 bitmap font (ASCII 32-127)
 // 8x8 bitmap font for ASCII 32-127 (index 0 = space)

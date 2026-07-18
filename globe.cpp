@@ -1024,6 +1024,11 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
 
     printf("\n输出: %dx%d, 地球半径=%.0fpx\n\n", FW, FH, ER);
 
+    // Count land/water from the original map (accurate, done once)
+    double land_pct, water_pct;
+    count_land_water_original(src, cx, cy, rx, ry, land_pct, water_pct);
+    printf("陆地: %.1f%%, 海洋: %.1f%%\n", land_pct, water_pct);
+
     // Pre-allocate frame buffer (reuse for all frames)
     Image frame;
     frame.create(FW, FH, 0, 0, 0);
@@ -1037,6 +1042,11 @@ static int mode_rotate(const char *input_file, int num_frames, double lat0,
         generate_stars(frame, FW, FH, 42 + f);
         render_frame(frame, ECX, ECY, ER, lon0, lat0,
                       ell, ecx, ecy, rx, ry);
+
+        // Draw land/water percentage on frame
+        char info_text[64];
+        snprintf(info_text, sizeof(info_text), "Land: %.1f%%  Water: %.1f%%", land_pct, water_pct);
+        draw_text(frame, 10, FH - 20, info_text, 255, 255, 255);
 
         char fn[256];
         snprintf(fn, sizeof(fn), "%s/frame_%04d.png", out_dir, f);

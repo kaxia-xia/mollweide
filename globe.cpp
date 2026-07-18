@@ -700,37 +700,35 @@ static bool is_water_pixel(const unsigned char *p) {
     int r = p[0], g = p[1], b = p[2];
     int maxc = std::max({r, g, b});
     int minc = std::min({r, g, b});
-    if (maxc < 3) return true;
-
-    // Key insight: in true ocean, BLUE is significantly higher than BOTH
-    // red and green. Land pixels may have blue as the max channel too,
-    // but the difference is smaller, especially between blue and green.
-
-    // 1) Deep ocean: blue >> red, blue > green, significant margins
-    if (b > r && b > g && b > 40 && (b - r) > 20 && (b - g) > 8 && r < 110 && g < 130) return true;
-
-    // 2) Shallow/coastal: blue >= green > red, red very low
-    if (b >= g && g > r && r < 65 && g > 25 && b > 25 && (b - r) > 28 && (b - g) > 5) return true;
-
-    // 3) Very dark: all channels very low, blue slightly dominant
-    if (maxc < 30 && b >= r && b >= g && r < 20 && g < 20) return true;
-
-    // 4) Bright white/cyan over water: blue clearly dominates
-    if (r > 240 && g > 240 && b > 240 && b > r && b > g) return true;
-
-    // --- Snowball Earth (test2.jpg) specific rules ---
-    // In snowball Earth maps, the ocean is covered by bright white ice,
-    // while land appears as gray/brown exposed rock.
+    int sat = maxc - minc;  // saturation-like measure
+    int avg = (r + g + b) / 3;
     
-    // 4b) Bright white ice ocean: very bright, nearly uniform, slight blue tint
-    // Allow b to be slightly lower than r or g (within 3) for snowy ice
-    if (maxc > 235 && (maxc - minc) < 18 && b >= r - 3 && b >= g - 3) return true;
-    
-    // 4c) Medium-bright blue-gray ice ocean: blue channel clearly dominant
-    if (maxc >= 150 && maxc <= 240 && b > r + 12 && b > g + 8) return true;
+    if (maxc < 5) return true;
 
-    // 4d) Medium gray land: blue not dominant enough, or colors are too balanced
-    // (fall through to return false)
+    // --- Bright / white pixels (snowball earth scenario) ---
+    // Frozen ocean = very low saturation, very high brightness
+    // Land = higher saturation, medium-high brightness
+    if (avg > 180) {
+        if (sat < 12) return true;   // Low saturation + bright = frozen ocean / ice
+        else return false;            // Higher saturation = land (exposed rock)
+    }
+
+    // --- Ocean: blue dominates ---
+    if (b > r && b > g) {
+        int bmr = b - r;
+        int bmg = b - g;
+        if (bmr > 15 && bmg > 8) return true;     // Deep ocean: strong blue dominance
+        if (bmr > 8 && bmg > 4 && avg < 150) return true;  // Moderate blue, darker = water
+    }
+
+    // --- Dark pixels ---
+    if (maxc < 80) {
+        if (b > r && b > g) return true;  // Dark blue = deep ocean
+        return false;                       // Dark gray/brown = land
+    }
+
+    // --- Default blue check ---
+    if (b > r && b > g && (b - r) > 10) return true;
 
     return false;
 }

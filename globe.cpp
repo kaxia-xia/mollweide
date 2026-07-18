@@ -2117,7 +2117,64 @@ int main(int argc, char **argv) {
         }
 
         return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
+        return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
     }
+
+    // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
+    if (strcmp(argv[1], "--render-frame") == 0) {
+        if (argc < 9) {
+            fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple\n", argv[0]);
+            return 1;
+        }
+        int rw = atoi(argv[2]);
+        int rh = atoi(argv[3]);
+        double cx = atof(argv[4]);
+        double cy = atof(argv[5]);
+        double rx = atof(argv[6]);
+        double ry = atof(argv[7]);
+        double lon0 = atof(argv[8]) * PI / 180.0;
+        double lat0 = atof(argv[9]) * PI / 180.0;
+        if (argc > 10 && atoi(argv[10]) == 1) purple_mode = true;
+
+        // Read raw frame from stdin
+        size_t frame_size = (size_t)rw * rh * 3;
+        std::vector<unsigned char> raw_buf(frame_size);
+        size_t nread = fread(raw_buf.data(), 1, frame_size, stdin);
+        if (nread != frame_size) {
+            fprintf(stderr, "读取帧数据不完整: %zu / %zu\n", nread, frame_size);
+            return 1;
+        }
+
+        // Create image from raw data
+        Image src;
+        src.w = rw;
+        src.h = rh;
+        src.data.assign(raw_buf.begin(), raw_buf.end());
+
+        // Extract ellipse texture
+        Image ell;
+        double ecx, ecy;
+        extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+        // Render frame
+        const int FW = 1920, FH = 1080;
+        const double ER = 420.0;
+        const double ECX = FW / 2.0;
+        const double ECY = FH / 2.0;
+
+        Image frame;
+        frame.create(FW, FH, 0, 0, 0);
+        generate_stars(frame, FW, FH, 42);
+        render_frame(frame, ECX, ECY, ER, lon0, lat0, ell, ecx, ecy, rx, ry);
+
+        // Output raw RGB24 to stdout
+        fwrite(frame.data.data(), 1, (size_t)FW * FH * 3, stdout);
+        fflush(stdout);
+
+        return 0;
+    }
+
+    // Normal mode
     if (strcmp(argv[1], "--journey-video") == 0) {
         if (argc < 3) {
             fprintf(stderr, "错误: --journey-video 需要指定输入视频文件\n");

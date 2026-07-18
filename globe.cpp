@@ -206,6 +206,13 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     // Compute wrapped mx (shift by ±2 to get the other side of the texture)
     double wmx2 = (wmx >= 0.0) ? wmx - 2.0 : wmx + 2.0;
 
+    // When |wmx| > 0.92, we are near the ±180° meridian (texture edge).
+    // The texture edge may have artifacts due to ellipse boundary extraction.
+    // In this region, blend between primary and wrapped samples to ensure
+    // a smooth transition across the 180° meridian.
+    // At |wmx| = 1.0, use 100% wrapped sample.
+    double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.92) / 0.08);
+
     // Primary sample
     double ex = ecx + wmx * rx;
     double ey = ecy + my * ry;
@@ -219,43 +226,39 @@ static bool sample_ellipse(const Image &ell, double ecx, double ecy,
     bool primary_valid = (r > 8 || g > 8 || b > 8);
     bool wrapped_valid = (r2 > 8 || g2 > 8 || b2 > 8);
 
-    // If primary sample is invalid (dark edge), use wrapped sample
-    if (!primary_valid && wrapped_valid) {
+    if (wrap_blend > 0.0 && wrapped_valid) {
+        // Near the edge: blend towards wrapped sample
+        r = (unsigned char)(r * (1.0 - wrap_blend) + r2 * wrap_blend);
+        g = (unsigned char)(g * (1.0 - wrap_blend) + g2 * wrap_blend);
+        b = (unsigned char)(b * (1.0 - wrap_blend) + b2 * wrap_blend);
+        return true;
+    }
+
+    // Use primary if valid
+    if (primary_valid) return true;
+
+    // Use wrapped if primary invalid
+    if (wrapped_valid) {
         r = r2; g = g2; b = b2;
         return true;
     }
 
-    // If both are valid and we're near the ±180° meridian (|mx| > 0.85), blend
-    // to ensure seamless transition at the date line
-    if (primary_valid && wrapped_valid) {
-        double wrap_blend = std::max(0.0, (std::abs(wmx) - 0.85) / 0.15);
-        if (wrap_blend > 0.0) {
-            r = (unsigned char)(r * (1.0 - wrap_blend) + r2 * wrap_blend);
-            g = (unsigned char)(g * (1.0 - wrap_blend) + g2 * wrap_blend);
-            b = (unsigned char)(b * (1.0 - wrap_blend) + b2 * wrap_blend);
-        }
-    }
-
     // If neither is valid, try sampling slightly inside the texture
-    if (!primary_valid && !wrapped_valid) {
-        double inset = 0.99;
-        double wmx_inset = wmx * inset;
-        double ex_inset = ecx + wmx_inset * rx;
-        sample_bilinear(ell, ex_inset, ey, r, g, b);
-        if (r > 8 || g > 8 || b > 8) return true;
+    double inset = 0.99;
+    double wmx_inset = wmx * inset;
+    double ex_inset = ecx + wmx_inset * rx;
+    sample_bilinear(ell, ex_inset, ey, r, g, b);
+    if (r > 8 || g > 8 || b > 8) return true;
 
-        double wmx2_inset = wmx2 * inset;
-        double ex2_inset = ecx + wmx2_inset * rx;
-        sample_bilinear(ell, ex2_inset, ey, r2, g2, b2);
-        if (r2 > 8 || g2 > 8 || b2 > 8) {
-            r = r2; g = g2; b = b2;
-            return true;
-        }
-
-        return false;
+    double wmx2_inset = wmx2 * inset;
+    double ex2_inset = ecx + wmx2_inset * rx;
+    sample_bilinear(ell, ex2_inset, ey, r2, g2, b2);
+    if (r2 > 8 || g2 > 8 || b2 > 8) {
+        r = r2; g = g2; b = b2;
+        return true;
     }
 
-    return true;
+    return false;
 }
 
 // Find the map ellipse in the source image
@@ -350,8 +353,11 @@ static void extract_ellipse(const Image &src,
         }
 
     // Second pass: fill pixels outside the ellipse (but within the texture bounds)
-    // by copying from the nearest colored pixel. This ensures seamless horizontal
-    // wrapping at the 180deg meridian.
+    // by wrapping horizontally from the opposite side.
+    // In Mollweide projection, mx=-1 (left edge) and mx=+1 (right edge) represent
+    // the same meridian (180°). So the texture should wrap seamlessly:
+    // left padding  ← right edge content
+    // right padding ← left edge content
     for (int ey = 0; ey < eh; ++ey) {
         int first = -1, last = -1;
         for (int ex = 0; ex < ew; ++ex) {
@@ -363,18 +369,34 @@ static void extract_ellipse(const Image &src,
         }
         if (first < 0) continue;
         
+        // Fill left padding from right side (wrapping: nx -> nx + 2.0)
         if (first > 0) {
-            auto sp = ell.pix(first, ey);
             for (int ex = 0; ex < first; ++ex) {
-                auto dp = ell.pix(ex, ey);
-                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                double nx = (ex - ecx) / rx;
+                double wrapped_nx = nx + 2.0;
+                double wrapped_ex = ecx + wrapped_nx * rx;
+                if (wrapped_ex >= 0 && wrapped_ex < ew) {
+                    auto sp = ell.pix((int)round(wrapped_ex), ey);
+                    if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
+                        auto dp = ell.pix(ex, ey);
+                        dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                    }
+                }
             }
         }
-        if (last >= 0 && last < ew - 1) {
-            auto sp = ell.pix(last, ey);
+        // Fill right padding from left side (wrapping: nx -> nx - 2.0)
+        if (last < ew - 1) {
             for (int ex = last + 1; ex < ew; ++ex) {
-                auto dp = ell.pix(ex, ey);
-                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                double nx = (ex - ecx) / rx;
+                double wrapped_nx = nx - 2.0;
+                double wrapped_ex = ecx + wrapped_nx * rx;
+                if (wrapped_ex >= 0 && wrapped_ex < ew) {
+                    auto sp = ell.pix((int)round(wrapped_ex), ey);
+                    if (sp[0] != 0 || sp[1] != 0 || sp[2] != 0) {
+                        auto dp = ell.pix(ex, ey);
+                        dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                    }
+                }
             }
         }
     }
@@ -451,8 +473,8 @@ static void repair_seam(Image &frame, double earth_cx, double earth_cy, double e
 
             auto dp = frame.pix(px, py);
             int maxc = std::max({dp[0], dp[1], dp[2]});
-            // Only repair pixels that are very dark (likely seam artifacts)
-            if (maxc < 15) {
+            // Only repair pixels that are dark (likely seam artifacts)
+            if (maxc < 20) {
                 int bright_neighbors = 0;
                 int avg_r = 0, avg_g = 0, avg_b = 0;
                 for (int dy = -1; dy <= 1; ++dy) {

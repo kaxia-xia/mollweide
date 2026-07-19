@@ -2117,13 +2117,13 @@ int main(int argc, char **argv) {
         }
 
         return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
-        return mode_journey(input_file, total_frames, out_dir, output_video, frames_only);
     }
 
     // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
+    // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
     if (strcmp(argv[1], "--render-frame") == 0) {
         if (argc < 9) {
-            fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple\n", argv[0]);
+            fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple land_pct\n", argv[0]);
             return 1;
         }
         int rw = atoi(argv[2]);
@@ -2135,6 +2135,8 @@ int main(int argc, char **argv) {
         double lon0 = atof(argv[8]) * PI / 180.0;
         double lat0 = atof(argv[9]) * PI / 180.0;
         if (argc > 10 && atoi(argv[10]) == 1) purple_mode = true;
+        double land_pct = (argc > 11) ? atof(argv[11]) : 0.0;
+        double water_pct = 100.0 - land_pct;
 
         // Read raw frame from stdin
         size_t frame_size = (size_t)rw * rh * 3;
@@ -2142,33 +2144,7 @@ int main(int argc, char **argv) {
         size_t nread = fread(raw_buf.data(), 1, frame_size, stdin);
         if (nread != frame_size) {
             fprintf(stderr, "读取帧数据不完整: %zu / %zu\n", nread, frame_size);
-        // Create image from raw data
-        Image src;
-        src.w = rw;
-        src.h = rh;
-        src.data.assign(raw_buf.begin(), raw_buf.end());
-
-        // Extract ellipse texture (redirect stdout to avoid polluting pipe)
-        // Save stdout, redirect to stderr temporarily
-        FILE *old_stdout = stdout;
-        stdout = stderr;
-        Image ell;
-        double ecx, ecy;
-        extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
-        stdout = old_stdout;
-
-        // Render frame
-        const int FW = 1920, FH = 1080;
-        const double ER = 420.0;
-        const double ECX = FW / 2.0;
-        const double ECY = FH / 2.0;
-
-        Image frame;
-        frame.create(FW, FH, 0, 0, 0);
-        generate_stars(frame, FW, FH, 42 + (int)(lon0 * 100));
-        render_frame(frame, ECX, ECY, ER, lon0, lat0, ell, ecx, ecy, rx, ry);
-
-        // Output raw RGB24 to stdout
+            return 1;
         }
 
         // Create image from raw data
@@ -2190,8 +2166,54 @@ int main(int argc, char **argv) {
 
         Image frame;
         frame.create(FW, FH, 0, 0, 0);
-        generate_stars(frame, FW, FH, 42);
+        generate_stars(frame, FW, FH, 42 + (int)(lon0 * 100));
         render_frame(frame, ECX, ECY, ER, lon0, lat0, ell, ecx, ecy, rx, ry);
+
+        // Draw land/water percentage
+        char info_text[64];
+        snprintf(info_text, sizeof(info_text), "Land: %.1f%%  Water: %.1f%%", land_pct, water_pct);
+        unsigned char tr = 255, tg = 255, tb = 255;
+        if (purple_mode) { tr = 200; tg = 100; tb = 255; }
+        int text_x = 20;
+        int text_y = FH - 40;
+        for (int ci = 0; info_text[ci]; ++ci) {
+            int cx2 = text_x + ci * 27;
+            unsigned char ch = (unsigned char)info_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        for (int dy = 0; dy < 3; ++dy)
+                            for (int dx = 0; dx < 3; ++dx)
+                                frame.set_pixel(cx2 + col*3 + dx, text_y + row*3 + dy, tr, tg, tb);
+                    }
+                }
+            }
+        }
+
+        // Draw lat/lon info
+        int lat_deg = (int)round(lat0 * 180 / PI);
+        int lon_deg = (int)round(lon0 * 180 / PI);
+        char coord_text[64];
+        snprintf(coord_text, sizeof(coord_text), "Lat: %+d  Lon: %d", lat_deg, lon_deg);
+        int coord_x = FW - (int)strlen(coord_text) * 9 - 20;
+        // Draw coord text using draw_text
+        // draw_text(frame, coord_x, 20, coord_text, 255, 255, 100);
+        // Simple pixel-based drawing for coord text
+        for (int ci = 0; coord_text[ci]; ++ci) {
+            int cx2 = coord_x + ci * 9;
+            unsigned char ch = (unsigned char)coord_text[ci];
+            if (ch < 32) ch = 32;
+            for (int row = 0; row < 8; ++row) {
+                unsigned char bits = font8x8[ch - 32][row];
+                for (int col = 0; col < 8; ++col) {
+                    if (bits & (0x80 >> col)) {
+                        frame.set_pixel(cx2 + col, 20 + row, 255, 255, 100);
+                    }
+                }
+            }
+        }
 
         // Output raw RGB24 to stdout
         fwrite(frame.data.data(), 1, (size_t)FW * FH * 3, stdout);

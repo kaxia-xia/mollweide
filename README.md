@@ -145,6 +145,10 @@ build/globe --video input.mp4 -o output.mp4 --vl 27 --purple
 
 ```bash
 python3 fast_journey.py input.mp4 output.mp4 [--split 86] [--purple]
+示例：
+```bash
+# 完整旅程，86秒分界，紫色辉光
+python3 fast_journey.py a.mp4 journey_output.mp4 --split 86 --purple
 ```
 
 参数说明：

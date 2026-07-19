@@ -224,7 +224,7 @@ def main():
             
             # 调用C++渲染程序
             render_proc = subprocess.Popen(
-                f'{globe_exe} --render-frame {vw} {vh} {cx} {cy} {rx} {ry} {lon0} {lat0} {purple_flag} {land_pct}',
+                f'{globe_exe} --render-frame {vw} {vh} {cx} {cy} {rx} {ry} {lon0} {lat0} {purple_flag}',
                 shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 preexec_fn=lambda: os.setsid() if hasattr(os, 'setsid') else None
             )

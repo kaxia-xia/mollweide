@@ -2120,10 +2120,10 @@ int main(int argc, char **argv) {
     }
 
     // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
-        // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
+    // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
     if (strcmp(argv[1], "--render-frame") == 0) {
         if (argc < 9) {
-            fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple land_pct\n", argv[0]);
+            fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple\n", argv[0]);
             return 1;
         }
         int rw = atoi(argv[2]);
@@ -2135,11 +2135,8 @@ int main(int argc, char **argv) {
         double lon0 = atof(argv[8]) * PI / 180.0;
         // lat0 from user: positive=north, negative=south
         // render_frame expects: positive=south (due to mode_rotate's -atof)
-        // So we negate: user's north -> render_frame's south
         double frame_lat = -atof(argv[9]) * PI / 180.0;
         if (argc > 10 && atoi(argv[10]) == 1) purple_mode = true;
-        double land_pct = (argc > 11) ? atof(argv[11]) : 0.0;
-        double water_pct = 100.0 - land_pct;
 
         // Read raw frame from stdin
         size_t frame_size = (size_t)rw * rh * 3;
@@ -2160,6 +2157,10 @@ int main(int argc, char **argv) {
         Image ell;
         double ecx, ecy;
         extract_ellipse(src, cx, cy, rx, ry, ell, ecx, ecy);
+
+        // Count land/water from the original frame (per-frame accurate)
+        double land_pct, water_pct;
+        count_land_water_original(src, cx, cy, rx, ry, land_pct, water_pct);
 
         // Render frame
         const int FW = 1920, FH = 1080;

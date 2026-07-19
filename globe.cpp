@@ -2120,7 +2120,7 @@ int main(int argc, char **argv) {
     }
 
     // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
-    // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
+        // Check for --render-frame mode (pipe mode: stdin -> render -> stdout)
     if (strcmp(argv[1], "--render-frame") == 0) {
         if (argc < 9) {
             fprintf(stderr, "用法: %s --render-frame w h cx cy rx ry lon0 lat0 purple land_pct\n", argv[0]);
@@ -2133,7 +2133,10 @@ int main(int argc, char **argv) {
         double rx = atof(argv[6]);
         double ry = atof(argv[7]);
         double lon0 = atof(argv[8]) * PI / 180.0;
-        double lat0 = atof(argv[9]) * PI / 180.0;
+        // lat0 from user: positive=north, negative=south
+        // render_frame expects: positive=south (due to mode_rotate's -atof)
+        // So we negate: user's north -> render_frame's south
+        double frame_lat = -atof(argv[9]) * PI / 180.0;
         if (argc > 10 && atoi(argv[10]) == 1) purple_mode = true;
         double land_pct = (argc > 11) ? atof(argv[11]) : 0.0;
         double water_pct = 100.0 - land_pct;
@@ -2167,7 +2170,7 @@ int main(int argc, char **argv) {
         Image frame;
         frame.create(FW, FH, 0, 0, 0);
         generate_stars(frame, FW, FH, 42 + (int)(lon0 * 100));
-        render_frame(frame, ECX, ECY, ER, lon0, lat0, ell, ecx, ecy, rx, ry);
+        render_frame(frame, ECX, ECY, ER, lon0, frame_lat, ell, ecx, ecy, rx, ry);
 
         // Draw land/water percentage
         char info_text[64];
@@ -2192,15 +2195,12 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Draw lat/lon info
-        int lat_deg = (int)round(lat0 * 180 / PI);
-        int lon_deg = (int)round(lon0 * 180 / PI);
+        // Draw lat/lon info (display user-facing values)
+        int display_lat = atoi(argv[9]);  // user's lat (positive=north)
+        int display_lon = (int)round(atof(argv[8]));  // user's lon
         char coord_text[64];
-        snprintf(coord_text, sizeof(coord_text), "Lat: %+d  Lon: %d", lat_deg, lon_deg);
+        snprintf(coord_text, sizeof(coord_text), "Lat: %+d  Lon: %d", display_lat, display_lon);
         int coord_x = FW - (int)strlen(coord_text) * 9 - 20;
-        // Draw coord text using draw_text
-        // draw_text(frame, coord_x, 20, coord_text, 255, 255, 100);
-        // Simple pixel-based drawing for coord text
         for (int ci = 0; coord_text[ci]; ++ci) {
             int cx2 = coord_x + ci * 9;
             unsigned char ch = (unsigned char)coord_text[ci];
@@ -2222,7 +2222,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Normal mode
+// Normal mode
     if (strcmp(argv[1], "--journey-video") == 0) {
         if (argc < 3) {
             fprintf(stderr, "错误: --journey-video 需要指定输入视频文件\n");

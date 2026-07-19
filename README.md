@@ -1,12 +1,13 @@
 # MapBeauty — 地球旋转视频帧生成器
 
-将摩尔维特（Mollweide）投影的世界地图转换为旋转地球3D动画，支持卫星云图风格渲染、0°/180° 双视角对比图、视频逐帧处理等功能。
+将摩尔维特（Mollweide）投影的世界地图转换为旋转地球3D动画，支持卫星云图风格渲染、0°/180° 双视角对比图、视频逐帧处理、旅程模式（纬度/经度渐变）等功能。
 
 ## 效果预览
 
 - **旋转地球视频**：输入一张摩尔维特投影地图，生成地球自转动画（1920×1080, 30fps）
 - **双视角对比图**：左右并排显示 0° 和 180° 经线视角，顶部标注陆地/海洋面积百分比
 - **视频逐帧处理**：输入一个视频，对每一帧生成双视角对比图，再合成新视频
+- **旅程模式**：从南回归线到北回归线的纬度/经度渐变动画，支持逐帧纹理提取
 
 ## 依赖
 
@@ -19,19 +20,21 @@
 
 ### 运行依赖
 - ffmpeg（用于视频帧提取和合成）
+- Python 3 + Pillow（用于旅程视频生成）
 
 ### 在 Termux 中安装依赖
 
 ```bash
 pkg update
-pkg install cmake gcc libpng libjpeg-turbo ffmpeg
+pkg install cmake gcc libpng libjpeg-turbo ffmpeg python python-pillow
 ```
 
 ### 在 Linux 中安装依赖
 
 ```bash
 # Debian/Ubuntu
-sudo apt install cmake g++ libpng-dev libjpeg-dev ffmpeg
+sudo apt install cmake g++ libpng-dev libjpeg-dev ffmpeg python3 python3-pip
+pip3 install Pillow
 
 # 安装 stb 头文件
 sudo apt install libstb-dev
@@ -41,7 +44,6 @@ sudo apt install libstb-dev
 ## 编译
 
 ```bash
-cd mapbeauty
 mkdir -p build && cd build
 cmake ..
 make -j4
@@ -51,7 +53,7 @@ make -j4
 
 ## 使用说明
 
-> 以下命令均在项目根目录 `mapbeauty/` 下执行，`build/globe` 为可执行文件路径。
+> 以下命令均在项目根目录下执行，`build/globe` 为可执行文件路径。
 
 ### 1. 生成旋转地球视频
 
@@ -119,12 +121,6 @@ build/globe --video input.mp4 -o output.mp4 --vl 27
 - `-o`：输出视频文件路径
 - 可选：在最后加输出目录名（默认 `frames`）
 
-处理流程：
-1. 用 ffmpeg 提取输入视频的所有帧
-2. 对每一帧自动检测椭圆、提取纹理、生成双视角对比图
-3. 合成新视频（无声音，`-an`）
-
-
 ### 9. 紫色辉光奇幻模式
 
 ```bash
@@ -139,6 +135,29 @@ build/globe --video input.mp4 -o output.mp4 --vl 27 --purple
 - **海洋**：变为较暗的紫色/靛蓝色
 - **大气辉光**：变为紫色调
 
+### 10. 旅程模式（纬度/经度渐变视频）
+
+从摩尔维特投影视频生成旅程动画：
+- **前半段**：视角从南回归线(-23.5°)渐变到赤道(0°)，经度从180°向西到0°
+- **后半段**：视角从赤道(0°)渐变到北回归线(+23.5°)，经度从0°向东到180°
+- 每帧独立统计并显示海陆面积占比
+- 支持紫色辉光模式
+
+```bash
+python3 fast_journey.py input.mp4 output.mp4 [--split 86] [--purple]
+```
+
+参数说明：
+- `input.mp4`：输入视频（摩尔维特投影）
+- `output.mp4`：输出视频
+- `--split 86`：前后段分界点（秒，默认86）
+- `--purple`：紫色辉光模式
+
+示例：
+```bash
+# 完整旅程，86秒分界，紫色辉光
+python3 fast_journey.py video/a.mp4 journey_output.mp4 --split 86 --purple
+```
 
 ### 完整参数列表
 
@@ -167,6 +186,7 @@ build/globe --video input.mp4 -o output.mp4 --vl 27 --purple
 - **帧图片**：1920×1080 PNG，底部显示陆地/海洋面积百分比
 - **视频**：H.264 (libx264), yuv420p, CRF 23, 1920×1080, 30fps
 - **对比图**：1920×1080，左半0°经线，右半180°经线，中间分隔线，顶部陆地/海洋百分比
+- **旅程视频**：1920×1080，30fps，每帧显示经纬度坐标和海陆面积占比
 
 ## 算法说明
 
@@ -180,12 +200,13 @@ build/globe --video input.mp4 -o output.mp4 --vl 27 --purple
 
 ```
 mapbeauty/
-├── globe.cpp          # 主程序源代码
-├── CMakeLists.txt     # CMake 构建配置
-├── build/             # 构建目录（编译后生成 globe 可执行文件）
-│   └── globe          # 可执行文件
-├── test/              # 测试图片目录
-│   ├── test1.jpg ~ test6.jpg
-├── frames/            # 默认帧输出目录
-└── README.md          # 本文件
+├── globe.cpp              # 主程序源代码
+├── CMakeLists.txt         # CMake 构建配置
+├── fast_journey.py        # 旅程视频生成器（Python + C++混合管道）
+├── build/                 # 构建目录
+│   └── globe              # 可执行文件
+├── test/                  # 测试图片目录
+│   ├── test0.jpg ~ test7.jpg
+├── video/                 # 视频素材目录
+└── README.md              # 本文件
 ```
